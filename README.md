@@ -15,9 +15,51 @@ Identity and Access Management (IAM) microservice powering role-based access con
 ```bash
 cp .env.example .env
 make dev-up
+``` 
+After containers is up, run: 
+```bash
+make db-init
+``` 
+and
+```bash
+make seed-dev
+```
+with creds from .env file. Env file structure:
+```env
+IAM_APP_NAME=iam-service
+IAM_APP_ENV=development
+IAM_APP_HOST=0.0.0.0
+IAM_APP_PORT=8080
+
+# gRPC server configuration
+IAM_GRPC_HOST=0.0.0.0
+IAM_GRPC_PORT=50051
+
+# Postgres connection
+IAM_POSTGRES_HOST=changeme!
+IAM_POSTGRES_PORT=5432
+IAM_POSTGRES_USER=changeme!
+IAM_POSTGRES_PASSWORD=changeme!
+IAM_POSTGRES_DATABASE=iam
+IAM_POSTGRES_SSL_MODE=disable
+IAM_POSTGRES_MAX_CONNS=10
+IAM_POSTGRES_MIN_CONNS=2
+IAM_POSTGRES_MAX_CONN_LIFETIME=60m
+IAM_POSTGRES_MAX_CONN_IDLE_TIME=15m
+IAM_POSTGRES_HEALTH_CHECK_PERIOD=30s
+
+# JWT settings
+IAM_JWT_SIGNING_KEY_PATH=changeme
+IAM_JWT_VERIFICATION_KEY_PATH=changeme
+IAM_JWT_ACCESS_TOKEN_TTL=15m
+IAM_JWT_REFRESH_TOKEN_TTL=168h
+
+# Telemetry (not implemented)
+IAM_TELEMETRY_METRICS_PORT=9090
+IAM_TELEMETRY_TRACING_ENDPOINT=http://localhost:4317
 ```
 
-The HTTP API listens on `http://localhost:8080`, while the internal gRPC endpoint is exposed at `localhost:50051`. Swagger documentation will be served at `/docs/index.html` once generated.
+Swagger documentation will be served at `/docs/index.html` once generated.
 
 Start the development environment:
 
@@ -26,12 +68,6 @@ cd build/compose
 docker-compose up iam-dev
 ```
 
-The service will:
-- Run with hot-reload enabled (using `air`)
-- Mount the project directory to `/workspace`
-- Use keys from `build/compose/secrets/`
-- Expose port 8080
-
 For production, build and run the final target:
 
 ```bash
@@ -39,6 +75,7 @@ cd build/compose
 docker-compose build --target final
 docker-compose up
 ```
+Warning: prod build have not implemented features.
 
 ### Useful commands
 
@@ -73,26 +110,6 @@ This script creates the IAM schema if needed and provisions two accounts:
 
 The seed is intended only for non-production environments.
 
-### OpenAPI validation & tooling
-
-This project uses [go-swagger](https://github.com/go-swagger/go-swagger) for OpenAPI spec validation and CLI tooling. To validate or work with the spec:
-
-```bash
-# Validate the OpenAPI spec
-swagger validate gen/docs/swagger/swagger.yaml
-
-# (Optional) Generate server/client stubs or docs
-swagger generate server -f gen/docs/swagger/swagger.yaml
-swagger generate client -f gen/docs/swagger/swagger.yaml
-swagger generate spec -o gen/docs/swagger/swagger.yaml
-```
-
-Install the CLI with:
-```bash
-go install github.com/go-swagger/go-swagger/cmd/swagger@latest
-```
-See [go-swagger docs](https://goswagger.io/) for more advanced usage.
-
 ## gRPC token validation API (internal only)
 
 Platform services that need to validate bearer tokens without understanding JWT internals can call the gRPC service defined in `gen/proto/iam/v1/token_validation.proto`.
@@ -116,40 +133,10 @@ The following command demonstrates how an internal service can validate a token 
 ```bash
 grpcurl -plaintext -d '{"token":"<ACCESS_TOKEN>"}' localhost:50051 iam.v1.TokenValidationService.Validate
 ```
-
-In production deployments you should secure the gRPC channel (mTLS or an internal service mesh) and restrict network access so only trusted workloads can reach this endpoint.
-
-## Project Layout
-
-```
-cmd/api                # service entrypoint
-gen/docs/swagger       # generated OpenAPI documentation
-gen/proto/iam/v1       # protobuf definitions for gRPC services
-internal/core/domain   # domain entities and value objects
-internal/core/port     # interfaces for use cases and adapters
-internal/infra/app     # application bootstrap helpers
-internal/infra/config  # configuration loading and defaults
-internal/infra/database# persistence connection utilities
-internal/infra/logger  # structured logging setup
-internal/infra/security# cryptographic helpers and token utilities
-internal/infra/telemetry# metrics and tracing instrumentation
-internal/repository    # data persistence adapters (e.g., Postgres)
-internal/transport/grpc# gRPC servers and wiring
-internal/transport/http# HTTP handlers, middleware, and routing
-internal/usecase       # business logic services
-migrations             # SQL migrations
-scripts                # helper scripts (migrations, tooling)
-```
-
 ## Roadmap
-
-- MVP
 - Add MFA
 - JTI list
 - Rate-limits
 - Captcha
 - Token rotation on suspicious activity
 
-## License
-
-This project is released under the MIT License.
