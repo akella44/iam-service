@@ -1,0 +1,740 @@
+definitions:
+  domain.UserStatus:
+    enum:
+    - pending
+    - active
+    - locked
+    - disabled
+    type: string
+    x-enum-varnames:
+    - UserStatusPending
+    - UserStatusActive
+    - UserStatusLocked
+    - UserStatusDisabled
+  handlers.AuthLoginRequest:
+    properties:
+      identifier:
+        type: string
+      password:
+        type: string
+    required:
+    - identifier
+    - password
+    type: object
+  handlers.AuthLoginResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+      token_type:
+        type: string
+      user:
+        $ref: '#/definitions/handlers.UserSummary'
+    type: object
+  handlers.AuthPendingResponse:
+    properties:
+      message:
+        type: string
+      user:
+        $ref: '#/definitions/handlers.UserSummary'
+    type: object
+  handlers.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  handlers.HealthResponse:
+    properties:
+      started_at:
+        type: string
+      status:
+        type: string
+    type: object
+  handlers.PasswordChangeRequest:
+    properties:
+      current_password:
+        type: string
+      new_password:
+        type: string
+      user_id:
+        type: string
+    required:
+    - new_password
+    type: object
+  handlers.PasswordChangeResponse:
+    properties:
+      changed:
+        type: boolean
+    type: object
+  handlers.PasswordResetConfirmRequest:
+    properties:
+      code:
+        type: string
+      new_password:
+        type: string
+      token:
+        type: string
+    required:
+    - new_password
+    type: object
+  handlers.PasswordResetConfirmResponse:
+    properties:
+      reset:
+        type: boolean
+    type: object
+  handlers.PasswordResetRequest:
+    properties:
+      identifier:
+        type: string
+    required:
+    - identifier
+    type: object
+  handlers.PasswordResetResponse:
+    properties:
+      dev_code:
+        description: Development-only reset code (present when service runs in dev mode)
+        type: string
+      delivery:
+        type: string
+      expires_at:
+        type: string
+      dev_token:
+        description: Development-only reset token (present when service runs in dev mode)
+        type: string
+    type: object
+  handlers.PermissionPayload:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  handlers.RegistrationRequest:
+    properties:
+      email:
+        type: string
+      password:
+        minLength: 8
+        type: string
+      phone:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  handlers.RegistrationResponse:
+    properties:
+      dev_code:
+        description: Development-only verification code (present when service runs in dev mode)
+        type: string
+      delivery:
+        type: string
+      expires_at:
+        type: string
+      message:
+        type: string
+      requires_verification:
+        type: boolean
+      dev_token:
+        description: Development-only verification token (present when service runs in dev mode)
+        type: string
+      user:
+        $ref: '#/definitions/handlers.UserSummary'
+    type: object
+  handlers.RegistrationVerifyRequest:
+    properties:
+      code:
+        type: string
+    required:
+    - code
+    type: object
+  handlers.RegistrationVerifyResponse:
+    properties:
+      message:
+        type: string
+      user:
+        $ref: '#/definitions/handlers.UserSummary'
+    type: object
+  handlers.RoleCreateRequest:
+    properties:
+      assign_user_ids:
+        items:
+          type: string
+        type: array
+      description:
+        type: string
+      name:
+        type: string
+      permissions:
+        items:
+          $ref: '#/definitions/handlers.PermissionPayload'
+        type: array
+    required:
+    - name
+    type: object
+  handlers.RoleCreateResponse:
+    properties:
+      assigned_user_ids:
+        items:
+          type: string
+        type: array
+      permissions:
+        items:
+          $ref: '#/definitions/handlers.PermissionPayload'
+        type: array
+      role:
+        $ref: '#/definitions/handlers.RolePayload'
+    type: object
+  handlers.RolePayload:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.SessionListResponse:
+    properties:
+      sessions:
+        items:
+          $ref: '#/definitions/handlers.SessionPayload'
+        type: array
+    type: object
+  handlers.SessionPayload:
+    properties:
+      created_at:
+        type: string
+      device_id:
+        type: string
+      device_label:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      ip_first:
+        type: string
+      ip_last:
+        type: string
+      last_seen:
+        type: string
+      refresh_token_id:
+        type: string
+      revoke_reason:
+        type: string
+      revoked_at:
+        type: string
+      user_agent:
+        type: string
+      user_id:
+        type: string
+    type: object
+  handlers.SessionRevokeRequest:
+    properties:
+      reason:
+        type: string
+      session_id:
+        type: string
+    required:
+    - session_id
+    type: object
+  handlers.SessionRevokeResponse:
+    properties:
+      revoked:
+        type: boolean
+    type: object
+  handlers.SessionValidateResponse:
+    properties:
+      session:
+        $ref: '#/definitions/handlers.SessionPayload'
+      valid:
+        type: boolean
+    type: object
+  handlers.TokenRefreshRequest:
+    properties:
+      refresh_token:
+        type: string
+    required:
+    - refresh_token
+    type: object
+  handlers.TokenRefreshResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+      token_type:
+        type: string
+      user:
+        description: Optional user summary when include_user=true
+        $ref: '#/definitions/handlers.UserSummary'
+    type: object
+  handlers.UserSummary:
+    properties:
+      email:
+        type: string
+      id:
+        type: string
+      phone:
+        type: string
+      roles:
+        items:
+          type: string
+        type: array
+      status:
+        $ref: '#/definitions/domain.UserStatus'
+      username:
+        type: string
+    type: object
+info:
+  contact: {}
+paths:
+  /api/v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Validates the provided identifier and password, returning access
+        and refresh tokens on success.
+      parameters:
+      - description: Login request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AuthLoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthLoginResponse'
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/handlers.AuthPendingResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Authenticate a user with credentials
+      tags:
+      - Authentication
+  /api/v1/auth/token/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Issues a new access token using a valid refresh token.
+      parameters:
+      - description: Include user summary in response when true
+        in: query
+        name: include_user
+        required: false
+        type: boolean
+      - description: Refresh request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TokenRefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.TokenRefreshResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Refresh an access token
+      tags:
+      - Authentication
+  /api/v1/roles:
+    post:
+      consumes:
+      - application/json
+      description: Creates a role, optionally seeding permissions and assigning users.
+      parameters:
+      - description: Bearer access token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Role create request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RoleCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.RoleCreateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a new role
+      tags:
+      - Roles
+  /api/v1/session/list:
+    get:
+      description: Retrieves all active sessions for the specified user.
+      parameters:
+      - description: User identifier
+        in: query
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SessionListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List active sessions for a user
+      tags:
+      - Sessions
+  /api/v1/session/revoke:
+    post:
+      consumes:
+      - application/json
+      description: Revokes an active session using its identifier.
+      parameters:
+      - description: Session revoke request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SessionRevokeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SessionRevokeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Revoke a session
+      tags:
+      - Sessions
+  /api/v1/session/validate:
+    get:
+      description: Checks whether the provided session is still valid.
+      parameters:
+      - description: Session identifier
+        in: query
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SessionValidateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Validate a session
+      tags:
+      - Sessions
+  /api/v1/user/password/change:
+    post:
+      consumes:
+      - application/json
+      description: Updates the password for the current user or a delegated user when
+        permitted.
+      parameters:
+      - description: Bearer access token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Password change request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PasswordChangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PasswordChangeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Change the password for an authenticated user
+      tags:
+      - Password
+  /api/v1/user/password/reset:
+    post:
+      consumes:
+      - application/json
+      description: Starts the password reset flow for a user by issuing a reset token
+        or code.
+      parameters:
+      - description: Password reset request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PasswordResetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PasswordResetResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Initiate a password reset
+      tags:
+      - Password
+  /api/v1/user/password/reset/confirm:
+    post:
+      consumes:
+      - application/json
+      description: Finalizes the password reset using a token or verification code.
+      parameters:
+      - description: Password reset confirm request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PasswordResetConfirmRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PasswordResetConfirmResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Complete a password reset
+      tags:
+      - Password
+  /api/v1/user/register:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user with the provided credentials and contact information.
+      parameters:
+      - description: Registration request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegistrationRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.RegistrationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Register a new user account
+      tags:
+      - Registration
+  /api/v1/user/verify:
+    post:
+      consumes:
+      - application/json
+      description: Confirms a verification code to activate a pending user account.
+      parameters:
+      - description: Verification request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegistrationVerifyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.RegistrationVerifyResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Verify a pending user account
+      tags:
+      - Registration
+  /healthz:
+    get:
+      description: Returns the status and start time of the service.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.HealthResponse'
+      summary: Service health check
+      tags:
+      - Health
+swagger: "2.0"
+info:
+  title: Social Platform IAM API
+  version: "1.0.0"
+  description: |
+    OpenAPI specification for the Social Platform IAM microservice. This spec documents all HTTP endpoints, request/response models, and error formats.

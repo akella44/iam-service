@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iam-postgres
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iam_password}
+      POSTGRES_DB: ${POSTGRES_DB:-iam}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iam"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  iam-dev:
+    build:
+      context: ../../
+      dockerfile: build/Dockerfile
+      target: dev
+      network: host
+    container_name: iam-dev
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - IAM_APP_ENV=development
+      - IAM_JWT_KEY_DIRECTORY=/app/build/compose/secrets
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./secrets:/app/build/compose/secrets:ro
+
+volumes:
+  postgres-data:

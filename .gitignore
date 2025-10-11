@@ -1,0 +1,20 @@
+# Build artifacts
+bin/
+coverage.out
+
+# IDE files
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+.env.*
+!.env.example
+
+# Swagger generated docs
+/docs/swagger/*
+
+# Docker
+postgres-data
+secrets

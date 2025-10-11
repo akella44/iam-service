@@ -1,0 +1,32 @@
+# Ignore Docker compose runtime artifacts
+build/compose/postgres-data
+build/compose/.env
+build/compose/*.log
+
+# Git and editor files
+.git
+.gitignore
+.vscode
+.idea
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+tmp/
+dist/
+
+# Test cache
+.cache/
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation build
+docs/_build/
