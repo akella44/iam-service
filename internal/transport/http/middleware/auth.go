@@ -34,9 +34,15 @@ func RequireAuth(authService *usecase.AuthService) gin.HandlerFunc {
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		if len(parts) != 2 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized,
-				newErrorResponse(c, "invalid authorization format"))
+				newErrorResponse(c, "invalid authorization format: expected 'Bearer <token>'"))
+			return
+		}
+
+		if !strings.EqualFold(parts[0], "Bearer") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized,
+				newErrorResponse(c, "invalid authorization format: must start with 'Bearer'"))
 			return
 		}
 

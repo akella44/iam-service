@@ -33,11 +33,11 @@ migrate-down:
 
 # Initialize database (run migrations directly via psql)
 db-init:
-	PGPASSWORD=$${DB_PASSWORD} psql -h $${DB_HOST} -p $${DB_PORT} -U $${DB_USER} -d $${DB_NAME} -v ON_ERROR_STOP=1 -f migrations/0001_init.up.sql
+	docker exec -i iam-postgres psql -U $${POSTGRES_USER:-iam} -d $${POSTGRES_DB:-iam} -v ON_ERROR_STOP=1 < migrations/0001_init.up.sql
 
 # Load seed data for development
 seed-dev:
-	PGPASSWORD=$${DB_PASSWORD} psql -h $${DB_HOST} -p $${DB_PORT} -U $${DB_USER} -d $${DB_NAME} -v ON_ERROR_STOP=1 -f migrations/dev/001_seed_data.sql
+	docker exec -i iam-postgres psql -U $${POSTGRES_USER:-iam} -d $${POSTGRES_DB:-iam} -v ON_ERROR_STOP=1 < migrations/dev/001_seed_data.sql
 
 # Initialize DB and load seed data (one command)
 db-setup-dev: db-init seed-dev

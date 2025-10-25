@@ -335,17 +335,25 @@ func (s *AuthService) ParseAccessToken(token string) (*security.AccessTokenClaim
 	claims := &security.AccessTokenClaims{}
 	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+			s.logger.Error("unexpected signing method", zap.Any("method", t.Header["alg"]))
 			return nil, fmt.Errorf("unexpected signing method %v", t.Header["alg"])
 		}
 
 		kid, ok := t.Header["kid"].(string)
 		if !ok {
+			s.logger.Error("kid header not found in token")
 			return nil, fmt.Errorf("kid header not found")
 		}
 
-		return s.keyProvider.GetVerificationKey(kid)
+		s.logger.Info("attempting to verify token", zap.String("kid", kid))
+		key, keyErr := s.keyProvider.GetVerificationKey(kid)
+		if keyErr != nil {
+			s.logger.Error("failed to get verification key", zap.String("kid", kid), zap.Error(keyErr))
+		}
+		return key, keyErr
 	}, jwt.WithIssuer(s.cfg.App.Name), jwt.WithAudience(s.cfg.App.Name))
 	if err != nil {
+		s.logger.Error("token validation failed", zap.Error(err))
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, ErrExpiredAccessToken
 		}

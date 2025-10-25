@@ -72,7 +72,7 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		return nil, fmt.Errorf("configure argon2: %w", err)
 	}
 
-	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "default-kid")
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "v1")
 	if err != nil {
 		return nil, fmt.Errorf("init token generator: %w", err)
 	}
