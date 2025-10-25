@@ -15,12 +15,15 @@ import (
 
 	"github.com/arklim/social-platform-iam/internal/infra/config"
 	"github.com/arklim/social-platform-iam/internal/infra/database"
+	kafkainfra "github.com/arklim/social-platform-iam/internal/infra/kafka"
 	"github.com/arklim/social-platform-iam/internal/infra/logger"
+	redisinfra "github.com/arklim/social-platform-iam/internal/infra/redis"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/infra/telemetry"
 	postgresrepo "github.com/arklim/social-platform-iam/internal/repository/postgres"
-	"github.com/arklim/social-platform-iam/internal/transport/grpc/iamv1"
-	grpcserver "github.com/arklim/social-platform-iam/internal/transport/grpc/server"
+	redisrepo "github.com/arklim/social-platform-iam/internal/repository/redis"
+	transportgrpc "github.com/arklim/social-platform-iam/internal/transport/grpc"
+	"github.com/arklim/social-platform-iam/internal/transport/http/middleware"
 	"github.com/arklim/social-platform-iam/internal/transport/http/routes"
 	"github.com/arklim/social-platform-iam/internal/usecase"
 )
@@ -30,6 +33,7 @@ type Application struct {
 	engine     *gin.Engine
 	logger     *zap.Logger
 	pool       *pgxpool.Pool
+	redis      *redisinfra.Client
 	grpcServer *grpc.Server
 	grpcAddr   string
 }
@@ -55,39 +59,88 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init key provider: %w", err)
 	}
+	jwksManager := security.NewJWTManager(keyProvider)
+
+	argonCfg := security.Argon2Config{
+		Memory:      cfg.Argon2.Memory,
+		Iterations:  cfg.Argon2.Iterations,
+		Parallelism: cfg.Argon2.Parallelism,
+		SaltLength:  cfg.Argon2.SaltLength,
+		KeyLength:   cfg.Argon2.KeyLength,
+	}
+	if err := security.ConfigureArgon2(argonCfg); err != nil {
+		return nil, fmt.Errorf("configure argon2: %w", err)
+	}
 
 	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "default-kid")
 	if err != nil {
 		return nil, fmt.Errorf("init token generator: %w", err)
 	}
 
+	redisClient, err := redisinfra.NewClient(cfg.Redis, log)
+	if err != nil {
+		return nil, fmt.Errorf("init redis: %w", err)
+	}
+
+	revocationStore := redisrepo.NewRevocationRepository(redisClient.Client(), "iam:token:revocation")
+
 	repos := postgresrepo.NewRepositories(pool)
 
+	eventPublisher := kafkainfra.NewStubPublisher(log)
 	passwordValidator := security.DefaultPasswordValidator()
+	passwordPolicy := security.NewPasswordPolicy()
 
-	authService, err := usecase.NewAuthService(cfg, repos.Users, repos.Roles, repos.Permissions, repos.Sessions, repos.Tokens, tokenGenerator, keyProvider)
+	rateLimitWindow := cfg.RateLimit.WindowDuration
+	if rateLimitWindow <= 0 {
+		rateLimitWindow = time.Minute
+	}
+	rateLimitTTL := rateLimitWindow * 2
+	rateLimitStore := redisrepo.NewRateLimitRepository(redisClient.Client(), redisrepo.SlidingWindowConfig{
+		KeyPrefix: "iam:rate-limit",
+		TTL:       rateLimitTTL,
+	})
+
+	rateLimiter := middleware.NewRateLimiter(rateLimitStore, log)
+
+	authService, err := usecase.NewAuthService(cfg, repos.Users, repos.Roles, repos.Permissions, repos.Sessions, repos.Tokens, tokenGenerator, keyProvider, rateLimitStore, log)
 	if err != nil {
+		_ = redisClient.Close()
 		return nil, fmt.Errorf("init auth service: %w", err)
 	}
 
-	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordValidator)
+	sessionService := usecase.NewSessionService(repos.Sessions, repos.Tokens, eventPublisher, log)
+	authService.WithSessionService(sessionService)
+
+	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordPolicy, eventPublisher)
 	userService := usecase.NewUserService(repos.Users, repos.Permissions, passwordValidator)
 	roleService := usecase.NewRoleService(repos.Roles, repos.Permissions, repos.Users)
-	passwordResetService := usecase.NewPasswordResetService(repos.Users, repos.Tokens, passwordValidator)
+	passwordResetService := usecase.NewPasswordResetService(cfg, repos.Users, repos.Tokens, rateLimitStore, eventPublisher, sessionService, passwordValidator, passwordPolicy, log)
+	tokenService := usecase.NewTokenService(cfg, keyProvider, repos.Tokens, repos.Sessions, repos.Users, revocationStore, log)
 
-	grpcSrv := grpc.NewServer()
-	tokenValidationServer := grpcserver.NewTokenValidationServer(authService)
-	iamv1.RegisterTokenValidationServiceServer(grpcSrv, tokenValidationServer)
+	grpcSrv, err := transportgrpc.NewServer(transportgrpc.ServerDependencies{
+		AuthService:  authService,
+		TokenService: tokenService,
+		Logger:       log,
+	})
+	if err != nil {
+		_ = redisClient.Close()
+		return nil, fmt.Errorf("init grpc server: %w", err)
+	}
 
 	engine := routes.Register(routes.Dependencies{
-		Config: cfg,
-		Logger: log,
+		Config:      cfg,
+		Logger:      log,
+		RateLimiter: rateLimiter,
+		JWTManager:  jwksManager,
+		Database:    pool,
+		Cache:       redisClient,
 		Services: routes.ServiceSet{
 			Auth:          authService,
 			Registration:  registrationService,
 			Users:         userService,
 			Roles:         roleService,
 			PasswordReset: passwordResetService,
+			Sessions:      sessionService,
 		},
 	})
 
@@ -96,6 +149,7 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		engine:     engine,
 		logger:     log,
 		pool:       pool,
+		redis:      redisClient,
 		grpcServer: grpcSrv,
 		grpcAddr:   fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port),
 	}, nil
@@ -108,6 +162,11 @@ func (a *Application) Run(ctx context.Context) error {
 	defer func() {
 		if a.pool != nil {
 			a.pool.Close()
+		}
+	}()
+	defer func() {
+		if a.redis != nil {
+			_ = a.redis.Close()
 		}
 	}()
 

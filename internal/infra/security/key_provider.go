@@ -30,6 +30,15 @@ type DevKeyProvider struct {
 	signingKey *rsa.PrivateKey
 }
 
+// ListVerificationKeys returns a copy of known public keys keyed by kid.
+func (p *DevKeyProvider) ListVerificationKeys() map[string]*rsa.PublicKey {
+	copy := make(map[string]*rsa.PublicKey, len(p.keys))
+	for kid, key := range p.keys {
+		copy[kid] = key
+	}
+	return copy
+}
+
 // NewDevKeyProvider creates a new DevKeyProvider.
 func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 	files, err := os.ReadDir(keyDir)
@@ -43,6 +52,15 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 
 	for _, file := range files {
 		if file.IsDir() {
+			continue
+		}
+
+		info, err := file.Info()
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat key file %s: %w", file.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Skip helper symlinks such as private.pem/public.pem to avoid duplicate kids.
 			continue
 		}
 
@@ -63,7 +81,7 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 			if provider.signingKey == nil {
 				provider.signingKey = key
 			}
-			kid := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+			kid := canonicalKid(file.Name())
 			provider.keys[kid] = &key.PublicKey
 			continue
 		}
@@ -74,7 +92,7 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 				if provider.signingKey == nil {
 					provider.signingKey = rsaKey
 				}
-				kid := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+				kid := canonicalKid(file.Name())
 				provider.keys[kid] = &rsaKey.PublicKey
 				continue
 			}
@@ -82,7 +100,7 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 
 		// Try to parse as public key (PKCS#1)
 		if key, err := x509.ParsePKCS1PublicKey(block.Bytes); err == nil {
-			kid := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+			kid := canonicalKid(file.Name())
 			provider.keys[kid] = key
 			continue
 		}
@@ -90,7 +108,7 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 		// Try to parse as public key (PKIX/X.509)
 		if key, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
 			if rsaKey, ok := key.(*rsa.PublicKey); ok {
-				kid := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+				kid := canonicalKid(file.Name())
 				provider.keys[kid] = rsaKey
 				continue
 			}
@@ -104,6 +122,17 @@ func NewDevKeyProvider(keyDir string) (*DevKeyProvider, error) {
 	}
 
 	return provider, nil
+}
+
+func canonicalKid(filename string) string {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	if strings.HasSuffix(base, ".pub") {
+		base = strings.TrimSuffix(base, ".pub")
+	}
+	if base == "" {
+		return filename
+	}
+	return base
 }
 
 // GetSigningKey returns the private key for signing tokens.

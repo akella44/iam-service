@@ -159,8 +159,8 @@ func (s *RoleService) CreateRole(ctx context.Context, actorID string, input Crea
 		result.Permissions = append(result.Permissions, *permission)
 	}
 
-	if err := s.roles.AttachPermissions(ctx, role.ID, permissionIDs); err != nil {
-		return result, fmt.Errorf("attach permissions: %w", err)
+	if _, err := s.roles.AssignPermissions(ctx, role.ID, permissionIDs); err != nil {
+		return result, fmt.Errorf("assign permissions: %w", err)
 	}
 
 	uniqueUserIDs := make([]string, 0, len(input.AssignUserIDs))

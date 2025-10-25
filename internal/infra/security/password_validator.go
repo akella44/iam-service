@@ -3,6 +3,8 @@ package security
 import (
 	"fmt"
 	"unicode"
+
+	zxcvbn "github.com/nbutton23/zxcvbn-go"
 )
 
 // PasswordValidationError represents a single password policy violation.
@@ -57,15 +59,6 @@ func (v *PasswordValidator) Validate(password string) error {
 	return nil
 }
 
-// DefaultPasswordValidator returns the built-in validator used by the application.
-func DefaultPasswordValidator() *PasswordValidator {
-	return NewPasswordValidator(
-		MinLengthRule(8),
-		RequireLetterRule(),
-		RequireDigitRule(),
-	)
-}
-
 // MinLengthRule ensures the password has at least min characters.
 func MinLengthRule(min int) PasswordRule {
 	return PasswordRuleFunc(func(password string) error {
@@ -76,6 +69,58 @@ func MinLengthRule(min int) PasswordRule {
 			}
 		}
 		return nil
+	})
+}
+
+// RequireCharacterClassesRule ensures the password contains characters from at least min distinct classes (upper, lower, digit, symbol).
+func RequireCharacterClassesRule(min int) PasswordRule {
+	return PasswordRuleFunc(func(password string) error {
+		if min <= 0 {
+			return nil
+		}
+
+		var (
+			hasUpper  bool
+			hasLower  bool
+			hasDigit  bool
+			hasSymbol bool
+		)
+
+		for _, r := range password {
+			switch {
+			case unicode.IsUpper(r):
+				hasUpper = true
+			case unicode.IsLower(r):
+				hasLower = true
+			case unicode.IsDigit(r):
+				hasDigit = true
+			case unicode.IsSymbol(r) || unicode.IsPunct(r):
+				hasSymbol = true
+			}
+		}
+
+		classes := 0
+		if hasUpper {
+			classes++
+		}
+		if hasLower {
+			classes++
+		}
+		if hasDigit {
+			classes++
+		}
+		if hasSymbol {
+			classes++
+		}
+
+		if classes >= min {
+			return nil
+		}
+
+		return &PasswordValidationError{
+			Code:    "character_classes",
+			Message: fmt.Sprintf("password must include at least %d character types", min),
+		}
 	})
 }
 
@@ -134,5 +179,27 @@ func RequireDifferentFrom(comparator string) PasswordRule {
 			}
 		}
 		return nil
+	})
+}
+
+// RequirePasswordStrengthRule enforces a minimum zxcvbn score to reject weak passwords.
+func RequirePasswordStrengthRule(minScore int, userInputs ...string) PasswordRule {
+	return PasswordRuleFunc(func(password string) error {
+		if minScore <= 0 {
+			return nil
+		}
+		if minScore > 4 {
+			minScore = 4
+		}
+
+		result := zxcvbn.PasswordStrength(password, userInputs)
+		if result.Score >= minScore {
+			return nil
+		}
+
+		return &PasswordValidationError{
+			Code:    "weak_password",
+			Message: "password is too weak; choose a more complex value",
+		}
 	})
 }

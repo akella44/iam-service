@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
 )
+
+const strongUserPassword = "Sup3r!SecurePass#7890"
 
 type userRepoMock struct {
 	user         domain.User
@@ -49,6 +52,30 @@ func (m *userRepoMock) UpdatePassword(_ context.Context, id string, hash string,
 	return nil
 }
 
+func (m *userRepoMock) AssignRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call: AssignRoles")
+}
+
+func (m *userRepoMock) RevokeRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call: RevokeRoles")
+}
+
+func (m *userRepoMock) GetUserRoles(context.Context, string) ([]domain.UserRole, error) {
+	return nil, errors.New("unexpected call: GetUserRoles")
+}
+
+func (m *userRepoMock) ListPasswordHistory(context.Context, string, int) ([]domain.UserPasswordHistory, error) {
+	return nil, errors.New("unexpected call: ListPasswordHistory")
+}
+
+func (m *userRepoMock) AddPasswordHistory(context.Context, domain.UserPasswordHistory) error {
+	return errors.New("unexpected call: AddPasswordHistory")
+}
+
+func (m *userRepoMock) TrimPasswordHistory(context.Context, string, int) error {
+	return errors.New("unexpected call: TrimPasswordHistory")
+}
+
 type permissionRepoMock struct {
 	userPermissions map[string][]domain.Permission
 	listErr         error
@@ -58,8 +85,32 @@ func (m *permissionRepoMock) Create(context.Context, domain.Permission) error {
 	return errors.New("unexpected call: Create permission")
 }
 
+func (m *permissionRepoMock) GetByID(context.Context, string) (*domain.Permission, error) {
+	return nil, errors.New("unexpected call: GetByID")
+}
+
 func (m *permissionRepoMock) GetByName(context.Context, string) (*domain.Permission, error) {
 	return nil, errors.New("unexpected call: GetByName")
+}
+
+func (m *permissionRepoMock) Update(context.Context, domain.Permission) error {
+	return errors.New("unexpected call: Update permission")
+}
+
+func (m *permissionRepoMock) Delete(context.Context, string) error {
+	return errors.New("unexpected call: Delete permission")
+}
+
+func (m *permissionRepoMock) List(context.Context, port.PermissionFilter) ([]domain.Permission, error) {
+	return nil, errors.New("unexpected call: List permissions")
+}
+
+func (m *permissionRepoMock) Count(context.Context, port.PermissionFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count permissions")
+}
+
+func (m *permissionRepoMock) ListNamespaces(context.Context) ([]port.PermissionNamespaceSummary, error) {
+	return nil, errors.New("unexpected call: ListNamespaces")
 }
 
 func (m *permissionRepoMock) ListByRole(context.Context, string) ([]domain.Permission, error) {
@@ -84,7 +135,7 @@ func TestUserServiceChangePasswordSelfSuccess(t *testing.T) {
 
 	if err := service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Current-123",
-		NewPassword:     "Newpass456",
+		NewPassword:     strongUserPassword,
 	}); err != nil {
 		t.Fatalf("ChangePassword returned error: %v", err)
 	}
@@ -102,7 +153,7 @@ func TestUserServiceChangePasswordSelfSuccess(t *testing.T) {
 		t.Fatalf("expected last_password_change timestamp to be set")
 	}
 
-	if ok, err := security.VerifyPassword("Newpass456", repo.updateHash); err != nil || !ok {
+	if ok, err := security.VerifyPassword(strongUserPassword, repo.updateHash); err != nil || !ok {
 		t.Fatalf("expected stored hash to match new password")
 	}
 	if ok, err := security.VerifyPassword("Current-123", repo.updateHash); err != nil {
@@ -125,7 +176,7 @@ func TestUserServiceChangePasswordOtherNoPermission(t *testing.T) {
 	err = service.ChangePassword(context.Background(), "admin", ChangePasswordInput{
 		TargetUserID:    "user-2",
 		CurrentPassword: "Secret123",
-		NewPassword:     "NewSecret456",
+		NewPassword:     strongUserPassword,
 	})
 	if !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("expected ErrPermissionDenied, got %v", err)
@@ -151,7 +202,7 @@ func TestUserServiceChangePasswordOtherWithPermission(t *testing.T) {
 	if err := service.ChangePassword(context.Background(), "admin", ChangePasswordInput{
 		TargetUserID:    "user-2",
 		CurrentPassword: "",
-		NewPassword:     "NewSecret456",
+		NewPassword:     strongUserPassword,
 	}); err != nil {
 		t.Fatalf("ChangePassword returned error: %v", err)
 	}
@@ -175,7 +226,7 @@ func TestUserServiceChangePasswordInvalidCurrent(t *testing.T) {
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Wrong123",
-		NewPassword:     "Newpass456",
+		NewPassword:     strongUserPassword,
 	})
 	if !errors.Is(err, ErrCurrentPasswordInvalid) {
 		t.Fatalf("expected ErrCurrentPasswordInvalid, got %v", err)
@@ -217,7 +268,7 @@ func TestUserServiceChangePasswordSelfMissingCurrent(t *testing.T) {
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "",
-		NewPassword:     "Newpass456",
+		NewPassword:     strongUserPassword,
 	})
 	if !errors.Is(err, ErrCurrentPasswordRequired) {
 		t.Fatalf("expected ErrCurrentPasswordRequired, got %v", err)

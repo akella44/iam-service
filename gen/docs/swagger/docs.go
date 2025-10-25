@@ -15,6 +15,38 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/.well-known/jwks.json": {
+            "get": {
+                "description": "Exposes the public keys used to verify IAM JWT signatures.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Public"
+                ],
+                "summary": "Retrieve JSON Web Key Set",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.JWKSResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/login": {
             "post": {
                 "description": "Validates the provided identifier and password, returning access and refresh tokens on success.",
@@ -41,15 +73,111 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Successfully authenticated",
                         "schema": {
                             "$ref": "#/definitions/handlers.AuthLoginResponse"
                         }
                     },
-                    "202": {
-                        "description": "Accepted",
+                    "400": {
+                        "description": "Invalid request payload",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid credentials",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Account pending verification or inactive",
                         "schema": {
                             "$ref": "#/definitions/handlers.AuthPendingResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/middleware.ProblemDetails"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service temporarily unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/logout": {
+            "post": {
+                "description": "Revokes the caller's active session using the access token's session context.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Logout the current session",
+                "responses": {
+                    "204": {
+                        "description": "No Content",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/refresh": {
+            "post": {
+                "description": "Issues a new access token and refresh token pair using a valid refresh token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Refresh an access token",
+                "parameters": [
+                    {
+                        "description": "Refresh request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.TokenRefreshRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.TokenRefreshResponse"
                         }
                     },
                     "400": {
@@ -66,6 +194,70 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/register": {
+            "post": {
+                "description": "Creates a new user with the supplied credentials and contact information.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Register a new user account",
+                "parameters": [
+                    {
+                        "description": "Registration request payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RegistrationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RegistrationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -136,6 +328,199 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/password/change": {
+            "post": {
+                "description": "Updates the password for the current user or a delegated user when permitted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Password"
+                ],
+                "summary": "Change the password for an authenticated user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer access token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Password change request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordChangeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordChangeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/password/reset/confirm": {
+            "post": {
+                "description": "Finalizes the password reset using a token or verification code.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Password"
+                ],
+                "summary": "Complete a password reset",
+                "parameters": [
+                    {
+                        "description": "Password reset confirm request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetConfirmRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetConfirmResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/password/reset/request": {
+            "post": {
+                "description": "Starts the password reset flow and always returns an accepted response to avoid account enumeration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Password"
+                ],
+                "summary": "Initiate a password reset",
+                "parameters": [
+                    {
+                        "description": "Password reset request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PasswordResetResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -226,23 +611,34 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/session/list": {
+        "/api/v1/sessions": {
             "get": {
-                "description": "Retrieves all active sessions for the specified user.",
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Retrieves sessions for the authenticated user with optional filtering.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Sessions"
                 ],
-                "summary": "List active sessions for a user",
+                "summary": "List sessions for authenticated user",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "User identifier",
-                        "name": "user_id",
-                        "in": "query",
+                        "description": "Bearer access token",
+                        "name": "Authorization",
+                        "in": "header",
                         "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "When true (default) only active sessions are returned",
+                        "name": "active_only",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -252,8 +648,71 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.SessionListResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Revokes all active sessions for the authenticated user (including the current one).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sessions"
+                ],
+                "summary": "Revoke all sessions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer access token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Must be true to confirm bulk revocation",
+                        "name": "all",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional revocation reason",
+                        "name": "reason",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SessionBulkRevokeResponse"
+                        }
+                    },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -267,39 +726,51 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/session/revoke": {
-            "post": {
-                "description": "Revokes an active session using its identifier.",
-                "consumes": [
-                    "application/json"
+        "/api/v1/sessions/others": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
                 ],
+                "description": "Revokes all active sessions except the current session.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Sessions"
                 ],
-                "summary": "Revoke a session",
+                "summary": "Revoke all other sessions",
                 "parameters": [
                     {
-                        "description": "Session revoke request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.SessionRevokeRequest"
-                        }
+                        "type": "string",
+                        "description": "Bearer access token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional revocation reason",
+                        "name": "reason",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SessionRevokeResponse"
+                            "$ref": "#/definitions/handlers.SessionBulkRevokeResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -319,9 +790,12 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/session/validate": {
-            "get": {
+        "/api/v1/sessions/validate": {
+            "post": {
                 "description": "Checks whether the provided session is still valid.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -331,11 +805,13 @@ const docTemplate = `{
                 "summary": "Validate a session",
                 "parameters": [
                     {
-                        "type": "string",
-                        "description": "Session identifier",
-                        "name": "session_id",
-                        "in": "query",
-                        "required": true
+                        "description": "Session validation request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SessionValidateRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -372,19 +848,21 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/user/password/change": {
-            "post": {
-                "description": "Updates the password for the current user or a delegated user when permitted.",
-                "consumes": [
-                    "application/json"
+        "/api/v1/sessions/{session_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
                 ],
+                "description": "Revokes an active session owned by the authenticated user.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Password"
+                    "Sessions"
                 ],
-                "summary": "Change the password for an authenticated user",
+                "summary": "Revoke a specific session",
                 "parameters": [
                     {
                         "type": "string",
@@ -394,21 +872,22 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Password change request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordChangeRequest"
-                        }
+                        "type": "string",
+                        "description": "Session identifier",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional revocation reason",
+                        "name": "reason",
+                        "in": "query"
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordChangeResponse"
-                        }
+                    "204": {
+                        "description": "Session revoked"
                     },
                     "400": {
                         "description": "Bad Request",
@@ -424,110 +903,6 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/user/password/reset": {
-            "post": {
-                "description": "Starts the password reset flow for a user by issuing a reset token or code.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Password"
-                ],
-                "summary": "Initiate a password reset",
-                "parameters": [
-                    {
-                        "description": "Password reset request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordResetRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordResetResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/user/password/reset/confirm": {
-            "post": {
-                "description": "Finalizes the password reset using a token or verification code.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Password"
-                ],
-                "summary": "Complete a password reset",
-                "parameters": [
-                    {
-                        "description": "Password reset confirm request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordResetConfirmRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.PasswordResetConfirmResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -664,6 +1039,32 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/readyz": {
+            "get": {
+                "description": "Returns readiness status including dependency checks.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Service readiness check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ReadyResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ReadyResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -689,6 +1090,12 @@ const docTemplate = `{
                 "password"
             ],
             "properties": {
+                "device_id": {
+                    "type": "string"
+                },
+                "device_label": {
+                    "type": "string"
+                },
                 "identifier": {
                     "type": "string"
                 },
@@ -703,8 +1110,14 @@ const docTemplate = `{
                 "access_token": {
                     "type": "string"
                 },
+                "expires_in": {
+                    "type": "integer"
+                },
                 "refresh_token": {
                     "type": "string"
+                },
+                "session": {
+                    "$ref": "#/definitions/handlers.SessionSummary"
                 },
                 "token_type": {
                     "type": "string"
@@ -730,6 +1143,9 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "trace_id": {
+                    "type": "string"
                 }
             }
         },
@@ -741,6 +1157,43 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JWKSKey": {
+            "type": "object",
+            "properties": {
+                "alg": {
+                    "type": "string"
+                },
+                "e": {
+                    "type": "string"
+                },
+                "kid": {
+                    "type": "string"
+                },
+                "kty": {
+                    "type": "string"
+                },
+                "n": {
+                    "type": "string"
+                },
+                "use": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JWKSResponse": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JWKSKey"
+                    }
                 }
             }
         },
@@ -764,8 +1217,17 @@ const docTemplate = `{
         "handlers.PasswordChangeResponse": {
             "type": "object",
             "properties": {
-                "changed": {
-                    "type": "boolean"
+                "changed_at": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "revoked_sessions": {
+                    "type": "integer"
+                },
+                "revoked_tokens": {
+                    "type": "integer"
                 }
             }
         },
@@ -789,18 +1251,30 @@ const docTemplate = `{
         "handlers.PasswordResetConfirmResponse": {
             "type": "object",
             "properties": {
-                "reset": {
-                    "type": "boolean"
+                "changed_at": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "revoked_sessions": {
+                    "type": "integer"
+                },
+                "revoked_tokens": {
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
                 }
             }
         },
         "handlers.PasswordResetRequest": {
             "type": "object",
             "required": [
-                "identifier"
+                "email_or_phone"
             ],
             "properties": {
-                "identifier": {
+                "email_or_phone": {
                     "type": "string"
                 }
             }
@@ -808,16 +1282,26 @@ const docTemplate = `{
         "handlers.PasswordResetResponse": {
             "type": "object",
             "properties": {
-                "code": {
+                "delivery": {
                     "type": "string"
                 },
-                "delivery": {
+                "dev_code": {
+                    "type": "string"
+                },
+                "dev_token": {
+                    "description": "SECURITY: DevToken and DevCode are ONLY exposed in development mode",
                     "type": "string"
                 },
                 "expires_at": {
                     "type": "string"
                 },
-                "token": {
+                "masked_destination": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "request_id": {
                     "type": "string"
                 }
             }
@@ -835,6 +1319,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ReadyResponse": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
                     "type": "string"
                 }
             }
@@ -864,10 +1365,15 @@ const docTemplate = `{
         "handlers.RegistrationResponse": {
             "type": "object",
             "properties": {
-                "code": {
+                "delivery": {
                     "type": "string"
                 },
-                "delivery": {
+                "dev_code": {
+                    "description": "Development only",
+                    "type": "string"
+                },
+                "dev_token": {
+                    "description": "SECURITY: DevToken and DevCode are ONLY exposed in development mode\nIn production, verification credentials are sent via secure channels",
                     "type": "string"
                 },
                 "expires_at": {
@@ -878,9 +1384,6 @@ const docTemplate = `{
                 },
                 "requires_verification": {
                     "type": "boolean"
-                },
-                "token": {
-                    "type": "string"
                 },
                 "user": {
                     "$ref": "#/definitions/handlers.UserSummary"
@@ -969,6 +1472,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.SessionBulkRevokeResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                },
+                "revoked_count": {
+                    "type": "integer"
+                },
+                "tokens_revoked": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.SessionListResponse": {
             "type": "object",
             "properties": {
@@ -977,6 +1494,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.SessionPayload"
                     }
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -1004,6 +1524,12 @@ const docTemplate = `{
                 "ip_last": {
                     "type": "string"
                 },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_current": {
+                    "type": "boolean"
+                },
                 "last_seen": {
                     "type": "string"
                 },
@@ -1024,25 +1550,34 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SessionRevokeRequest": {
+        "handlers.SessionSummary": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "device_label": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_seen": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SessionValidateRequest": {
             "type": "object",
             "required": [
                 "session_id"
             ],
             "properties": {
-                "reason": {
-                    "type": "string"
-                },
                 "session_id": {
                     "type": "string"
-                }
-            }
-        },
-        "handlers.SessionRevokeResponse": {
-            "type": "object",
-            "properties": {
-                "revoked": {
-                    "type": "boolean"
                 }
             }
         },
@@ -1073,6 +1608,9 @@ const docTemplate = `{
             "properties": {
                 "access_token": {
                     "type": "string"
+                },
+                "expires_in": {
+                    "type": "integer"
                 },
                 "refresh_token": {
                     "type": "string"
@@ -1107,6 +1645,32 @@ const docTemplate = `{
                     "$ref": "#/definitions/domain.UserStatus"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "middleware.ProblemDetails": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "retry_after": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trace_id": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }

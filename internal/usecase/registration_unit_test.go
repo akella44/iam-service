@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
 )
+
+const strongRegistrationPassword = "Sup3r!SecurePass#7890"
 
 type mockUserRepository struct {
 	createErr   error
@@ -26,6 +29,22 @@ type mockUserRepository struct {
 	updateStatusCalls  int
 	updateStatusID     string
 	updateStatusStatus domain.UserStatus
+
+	listHistoryResult []domain.UserPasswordHistory
+	listHistoryErr    error
+	listHistoryCalls  int
+	listHistoryUserID string
+	listHistoryLimit  int
+
+	addHistoryCalls int
+	addHistoryErr   error
+
+	trimHistoryCalls  int
+	trimHistoryErr    error
+	trimHistoryUserID string
+	trimHistoryLimit  int
+
+	lastHistoryEntry domain.UserPasswordHistory
 }
 
 func (m *mockUserRepository) Create(_ context.Context, user domain.User) error {
@@ -57,6 +76,47 @@ func (m *mockUserRepository) UpdateStatus(_ context.Context, id string, status d
 
 func (m *mockUserRepository) UpdatePassword(context.Context, string, string, string, time.Time) error {
 	return errors.New("unexpected call: UpdatePassword")
+}
+
+func (m *mockUserRepository) AssignRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call: AssignRoles")
+}
+
+func (m *mockUserRepository) RevokeRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call: RevokeRoles")
+}
+
+func (m *mockUserRepository) GetUserRoles(context.Context, string) ([]domain.UserRole, error) {
+	return nil, errors.New("unexpected call: GetUserRoles")
+}
+
+func (m *mockUserRepository) ListPasswordHistory(_ context.Context, userID string, limit int) ([]domain.UserPasswordHistory, error) {
+	m.listHistoryCalls++
+	m.listHistoryUserID = userID
+	m.listHistoryLimit = limit
+	if m.listHistoryErr != nil {
+		return nil, m.listHistoryErr
+	}
+	if m.listHistoryResult == nil {
+		return []domain.UserPasswordHistory{}, nil
+	}
+
+	out := make([]domain.UserPasswordHistory, len(m.listHistoryResult))
+	copy(out, m.listHistoryResult)
+	return out, nil
+}
+
+func (m *mockUserRepository) AddPasswordHistory(_ context.Context, entry domain.UserPasswordHistory) error {
+	m.addHistoryCalls++
+	m.lastHistoryEntry = entry
+	return m.addHistoryErr
+}
+
+func (m *mockUserRepository) TrimPasswordHistory(_ context.Context, userID string, limit int) error {
+	m.trimHistoryCalls++
+	m.trimHistoryUserID = userID
+	m.trimHistoryLimit = limit
+	return m.trimHistoryErr
 }
 
 type mockTokenRepository struct {
@@ -120,29 +180,81 @@ func (m *mockTokenRepository) RevokeRefreshToken(context.Context, string) error 
 	return errors.New("unexpected call: RevokeRefreshToken")
 }
 
+func (m *mockTokenRepository) MarkRefreshTokenUsed(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (m *mockTokenRepository) RevokeRefreshTokensByFamily(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockTokenRepository) RevokeRefreshTokensForUser(context.Context, string) error {
 	return errors.New("unexpected call: RevokeRefreshTokensForUser")
 }
 
-func (m *mockTokenRepository) StoreAccessTokenJTI(context.Context, domain.AccessTokenJTI) error {
-	return errors.New("unexpected call: StoreAccessTokenJTI")
+func (m *mockTokenRepository) TrackJTI(context.Context, domain.AccessTokenJTI) error {
+	return errors.New("unexpected call: TrackJTI")
 }
 
-func (m *mockTokenRepository) BlacklistAccessTokenJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return errors.New("unexpected call: BlacklistAccessTokenJTI")
+func (m *mockTokenRepository) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
+	return errors.New("unexpected call: RevokeJTI")
 }
 
-func (m *mockTokenRepository) IsAccessTokenJTIRevoked(context.Context, string) (bool, error) {
-	return false, errors.New("unexpected call: IsAccessTokenJTIRevoked")
+func (m *mockTokenRepository) RevokeJTIsBySession(context.Context, string, string) (int, error) {
+	return 0, errors.New("unexpected call: RevokeJTIsBySession")
+}
+
+func (m *mockTokenRepository) RevokeJTIsForUser(context.Context, string, string) (int, error) {
+	return 0, errors.New("unexpected call: RevokeJTIsForUser")
+}
+
+func (m *mockTokenRepository) IsJTIRevoked(context.Context, string) (bool, error) {
+	return false, errors.New("unexpected call: IsJTIRevoked")
+}
+
+func (m *mockTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
+	return 0, errors.New("unexpected call: CleanupExpiredJTIs")
+}
+
+func newRegistrationService(userRepo *mockUserRepository, tokenRepo *mockTokenRepository, publisher port.EventPublisher) *RegistrationService {
+	return NewRegistrationService(userRepo, tokenRepo, security.NewPasswordPolicy(), publisher)
+}
+
+type mockEventPublisher struct {
+	calls int
+	event domain.UserRegisteredEvent
+	err   error
+}
+
+func (m *mockEventPublisher) PublishUserRegistered(_ context.Context, event domain.UserRegisteredEvent) error {
+	m.calls++
+	m.event = event
+	return m.err
+}
+
+func (m *mockEventPublisher) PublishPasswordChanged(context.Context, domain.PasswordChangedEvent) error {
+	return nil
+}
+
+func (m *mockEventPublisher) PublishPasswordResetRequested(context.Context, domain.PasswordResetRequestedEvent) error {
+	return nil
+}
+
+func (m *mockEventPublisher) PublishRolesAssigned(context.Context, domain.RolesAssignedEvent) error {
+	return nil
+}
+
+func (m *mockEventPublisher) PublishSessionRevoked(context.Context, domain.SessionRevokedEvent) error {
+	return nil
 }
 
 func TestRegistrationService_RegisterUser_EmailMagicLink(t *testing.T) {
 	userRepo := &mockUserRepository{}
 	tokenRepo := &mockTokenRepository{}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
-	user, verification, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", "Password123")
+	user, verification, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", strongRegistrationPassword)
 	if err != nil {
 		t.Fatalf("RegisterUser returned error: %v", err)
 	}
@@ -191,8 +303,93 @@ func TestRegistrationService_RegisterUser_EmailMagicLink(t *testing.T) {
 		t.Fatalf("expected password hash to be stored")
 	}
 
-	if ok, err := security.VerifyPassword("Password123", userRepo.createdUser.PasswordHash); err != nil || !ok {
+	if ok, err := security.VerifyPassword(strongRegistrationPassword, userRepo.createdUser.PasswordHash); err != nil || !ok {
 		t.Fatalf("expected stored hash to match original password")
+	}
+
+	if userRepo.listHistoryCalls != 1 {
+		t.Fatalf("expected password history check to run once, got %d", userRepo.listHistoryCalls)
+	}
+
+	if userRepo.addHistoryCalls != 1 {
+		t.Fatalf("expected password history entry to be stored once, got %d", userRepo.addHistoryCalls)
+	}
+
+	if userRepo.lastHistoryEntry.UserID != user.ID {
+		t.Fatalf("expected password history user id %s, got %s", user.ID, userRepo.lastHistoryEntry.UserID)
+	}
+
+	if userRepo.trimHistoryCalls != 1 {
+		t.Fatalf("expected password history trim to run once, got %d", userRepo.trimHistoryCalls)
+	}
+
+	if userRepo.trimHistoryUserID != user.ID {
+		t.Fatalf("expected trim history for user %s, got %s", user.ID, userRepo.trimHistoryUserID)
+	}
+
+	if userRepo.trimHistoryLimit != defaultPasswordHistoryEntries {
+		t.Fatalf("expected trim history limit %d, got %d", defaultPasswordHistoryEntries, userRepo.trimHistoryLimit)
+	}
+}
+
+func TestRegistrationService_RegisterUser_PublishesEvent(t *testing.T) {
+	userRepo := &mockUserRepository{}
+	tokenRepo := &mockTokenRepository{}
+	publisher := &mockEventPublisher{}
+
+	service := newRegistrationService(userRepo, tokenRepo, publisher)
+	fixedNow := time.Date(2025, 1, 2, 15, 4, 5, 0, time.UTC)
+	service.WithClock(func() time.Time { return fixedNow })
+
+	user, verification, err := service.RegisterUser(context.Background(), "bob", "bob@example.com", "", strongRegistrationPassword)
+	if err != nil {
+		t.Fatalf("RegisterUser returned error: %v", err)
+	}
+
+	if publisher.calls != 1 {
+		t.Fatalf("expected event publisher to be called once, got %d", publisher.calls)
+	}
+
+	event := publisher.event
+	if event.UserID != user.ID {
+		t.Fatalf("expected event user ID %s, got %s", user.ID, event.UserID)
+	}
+	if event.Username != "bob" {
+		t.Fatalf("expected username bob, got %s", event.Username)
+	}
+	if event.RegisteredAt != fixedNow {
+		t.Fatalf("expected registered_at %v, got %v", fixedNow, event.RegisteredAt)
+	}
+	if event.RegistrationMethod != verificationDeliveryEmail {
+		t.Fatalf("expected registration method %s, got %s", verificationDeliveryEmail, event.RegistrationMethod)
+	}
+	if event.Email == nil || *event.Email != "bob@example.com" {
+		t.Fatalf("expected email pointer with value bob@example.com")
+	}
+	if event.Phone != nil {
+		t.Fatalf("expected phone to be nil for email registration")
+	}
+	if verification.Delivery != verificationDeliveryEmail {
+		t.Fatalf("expected delivery email, got %s", verification.Delivery)
+	}
+	if got := event.Metadata["verification_delivery"]; got != verificationDeliveryEmail {
+		t.Fatalf("expected metadata delivery %s, got %v", verificationDeliveryEmail, got)
+	}
+}
+
+func TestRegistrationService_RegisterUser_EventFailureDoesNotBlock(t *testing.T) {
+	userRepo := &mockUserRepository{}
+	tokenRepo := &mockTokenRepository{}
+	publisher := &mockEventPublisher{err: errors.New("kafka down")}
+
+	service := newRegistrationService(userRepo, tokenRepo, publisher)
+
+	if _, _, err := service.RegisterUser(context.Background(), "carol", "carol@example.com", "", strongRegistrationPassword); err != nil {
+		t.Fatalf("expected registration to succeed despite event failure, got %v", err)
+	}
+
+	if publisher.calls != 1 {
+		t.Fatalf("expected publisher to be invoked even on failure")
 	}
 }
 
@@ -200,9 +397,9 @@ func TestRegistrationService_RegisterUser_PhoneFallbackCode(t *testing.T) {
 	userRepo := &mockUserRepository{}
 	tokenRepo := &mockTokenRepository{}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
-	user, verification, err := service.RegisterUser(context.Background(), "alice", "", "+15555550123", "Password123")
+	user, verification, err := service.RegisterUser(context.Background(), "alice", "", "+15555550123", strongRegistrationPassword)
 	if err != nil {
 		t.Fatalf("RegisterUser returned error: %v", err)
 	}
@@ -234,7 +431,7 @@ func TestRegistrationService_RegisterUser_PhoneFallbackCode(t *testing.T) {
 }
 
 func TestRegistrationService_RegisterUser_ValidationErrors(t *testing.T) {
-	service := NewRegistrationService(&mockUserRepository{}, &mockTokenRepository{}, security.DefaultPasswordValidator())
+	service := newRegistrationService(&mockUserRepository{}, &mockTokenRepository{}, nil)
 
 	cases := []struct {
 		name     string
@@ -243,8 +440,8 @@ func TestRegistrationService_RegisterUser_ValidationErrors(t *testing.T) {
 		phone    string
 		password string
 	}{
-		{"missing username", "", "a@example.com", "", "Password123"},
-		{"missing contact", "alice", "", "", "Password123"},
+		{"missing username", "", "a@example.com", "", strongRegistrationPassword},
+		{"missing contact", "alice", "", "", strongRegistrationPassword},
 		{"missing password", "alice", "a@example.com", "", ""},
 	}
 
@@ -258,7 +455,7 @@ func TestRegistrationService_RegisterUser_ValidationErrors(t *testing.T) {
 }
 
 func TestRegistrationService_RegisterUser_PasswordPolicyViolation(t *testing.T) {
-	service := NewRegistrationService(&mockUserRepository{}, &mockTokenRepository{}, security.DefaultPasswordValidator())
+	service := newRegistrationService(&mockUserRepository{}, &mockTokenRepository{}, nil)
 
 	_, _, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", "password")
 	if !errors.Is(err, ErrPasswordPolicyViolation) {
@@ -266,13 +463,106 @@ func TestRegistrationService_RegisterUser_PasswordPolicyViolation(t *testing.T) 
 	}
 }
 
+func TestRegistrationService_RegisterUser_PasswordHistoryViolation(t *testing.T) {
+	hashed, err := security.HashPassword(strongRegistrationPassword)
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+
+	userRepo := &mockUserRepository{
+		listHistoryResult: []domain.UserPasswordHistory{{
+			ID:           "history-1",
+			UserID:       "user-1",
+			PasswordHash: hashed,
+			SetAt:        time.Now(),
+		}},
+	}
+	tokenRepo := &mockTokenRepository{}
+
+	service := newRegistrationService(userRepo, tokenRepo, nil)
+
+	if _, _, err := service.RegisterUser(context.Background(), "dave", "dave@example.com", "", strongRegistrationPassword); !errors.Is(err, ErrPasswordPolicyViolation) {
+		t.Fatalf("expected password reuse error, got %v", err)
+	}
+
+	if userRepo.createCalls != 0 {
+		t.Fatalf("expected user not to be created when history check fails")
+	}
+}
+
+func TestRegistrationService_RegisterUser_AddHistoryError(t *testing.T) {
+	userRepo := &mockUserRepository{addHistoryErr: errors.New("db down")}
+	tokenRepo := &mockTokenRepository{}
+
+	service := newRegistrationService(userRepo, tokenRepo, nil)
+
+	if _, _, err := service.RegisterUser(context.Background(), "erin", "erin@example.com", "", strongRegistrationPassword); err == nil || !strings.Contains(err.Error(), "store password history") {
+		t.Fatalf("expected store password history error, got %v", err)
+	}
+
+	if userRepo.createCalls != 1 {
+		t.Fatalf("expected user create to be attempted once, got %d", userRepo.createCalls)
+	}
+
+	if tokenRepo.createCalls != 0 {
+		t.Fatalf("expected verification token not to be created when history storage fails")
+	}
+
+	if userRepo.trimHistoryCalls != 0 {
+		t.Fatalf("expected trim history not to run when add fails")
+	}
+}
+
+func TestRegistrationService_RegisterUser_TrimHistoryError(t *testing.T) {
+	userRepo := &mockUserRepository{trimHistoryErr: errors.New("db down")}
+	tokenRepo := &mockTokenRepository{}
+
+	service := newRegistrationService(userRepo, tokenRepo, nil)
+
+	if _, _, err := service.RegisterUser(context.Background(), "frank", "frank@example.com", "", strongRegistrationPassword); err == nil || !strings.Contains(err.Error(), "trim password history") {
+		t.Fatalf("expected trim password history error, got %v", err)
+	}
+
+	if userRepo.createCalls != 1 {
+		t.Fatalf("expected user create to run once, got %d", userRepo.createCalls)
+	}
+
+	if userRepo.trimHistoryCalls != 1 {
+		t.Fatalf("expected trim history to be attempted once, got %d", userRepo.trimHistoryCalls)
+	}
+
+	if tokenRepo.createCalls != 0 {
+		t.Fatalf("expected verification token not to be created when trim fails")
+	}
+}
+
+func TestRegistrationService_RegisterUser_SkipTrimWhenHistoryLimitZero(t *testing.T) {
+	userRepo := &mockUserRepository{}
+	tokenRepo := &mockTokenRepository{}
+
+	service := newRegistrationService(userRepo, tokenRepo, nil)
+	service.WithHistoryLimit(0)
+
+	if _, _, err := service.RegisterUser(context.Background(), "gina", "gina@example.com", "", strongRegistrationPassword); err != nil {
+		t.Fatalf("RegisterUser returned error: %v", err)
+	}
+
+	if userRepo.addHistoryCalls != 1 {
+		t.Fatalf("expected password history entry to be added once, got %d", userRepo.addHistoryCalls)
+	}
+
+	if userRepo.trimHistoryCalls != 0 {
+		t.Fatalf("expected trim history not to run when limit is zero, got %d", userRepo.trimHistoryCalls)
+	}
+}
+
 func TestRegistrationService_RegisterUser_CreateError(t *testing.T) {
 	userRepo := &mockUserRepository{createErr: errors.New("boom")}
 	tokenRepo := &mockTokenRepository{}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
-	if _, _, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", "Password123"); err == nil {
+	if _, _, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", strongRegistrationPassword); err == nil {
 		t.Fatalf("expected error when user creation fails")
 	}
 
@@ -285,9 +575,9 @@ func TestRegistrationService_RegisterUser_TokenError(t *testing.T) {
 	userRepo := &mockUserRepository{}
 	tokenRepo := &mockTokenRepository{createVerificationErr: errors.New("boom")}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
-	if _, _, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", "Password123"); err == nil {
+	if _, _, err := service.RegisterUser(context.Background(), "alice", "alice@example.com", "", strongRegistrationPassword); err == nil {
 		t.Fatalf("expected error when token creation fails")
 	}
 
@@ -316,7 +606,7 @@ func TestRegistrationService_VerifyCode_Success(t *testing.T) {
 		getVerificationResult: &token,
 	}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
 	user, err := service.VerifyCode(context.Background(), code)
 	if err != nil {
@@ -347,7 +637,7 @@ func TestRegistrationService_VerifyCode_Success(t *testing.T) {
 
 func TestRegistrationService_VerifyCode_Invalid(t *testing.T) {
 	tokenRepo := &mockTokenRepository{getVerificationErr: repository.ErrNotFound}
-	service := NewRegistrationService(&mockUserRepository{}, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(&mockUserRepository{}, tokenRepo, nil)
 
 	if _, err := service.VerifyCode(context.Background(), "123456"); !errors.Is(err, ErrVerificationCodeInvalid) {
 		t.Fatalf("expected ErrVerificationCodeInvalid, got %v", err)
@@ -365,7 +655,7 @@ func TestRegistrationService_VerifyCode_Expired(t *testing.T) {
 	}
 
 	tokenRepo := &mockTokenRepository{getVerificationResult: &token}
-	service := NewRegistrationService(&mockUserRepository{}, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(&mockUserRepository{}, tokenRepo, nil)
 
 	if _, err := service.VerifyCode(context.Background(), code); !errors.Is(err, ErrVerificationCodeExpired) {
 		t.Fatalf("expected ErrVerificationCodeExpired, got %v", err)
@@ -417,7 +707,7 @@ func TestRegistrationService_VerifyCode_InvalidState(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tokenRepo := &mockTokenRepository{getVerificationResult: &tc.token}
-			service := NewRegistrationService(&mockUserRepository{}, tokenRepo, security.DefaultPasswordValidator())
+			service := newRegistrationService(&mockUserRepository{}, tokenRepo, nil)
 
 			if _, err := service.VerifyCode(context.Background(), code); !errors.Is(err, ErrVerificationCodeInvalid) {
 				t.Fatalf("expected ErrVerificationCodeInvalid, got %v", err)
@@ -442,7 +732,7 @@ func TestRegistrationService_VerifyCode_UpdateStatusError(t *testing.T) {
 	}
 
 	tokenRepo := &mockTokenRepository{getVerificationResult: &token}
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
 	if _, err := service.VerifyCode(context.Background(), code); err == nil || !strings.Contains(err.Error(), "activate user") {
 		t.Fatalf("expected activate user error, got %v", err)
@@ -468,7 +758,7 @@ func TestRegistrationService_VerifyCode_ConsumeError(t *testing.T) {
 		consumeVerificationErr: errors.New("boom"),
 	}
 
-	service := NewRegistrationService(userRepo, tokenRepo, security.DefaultPasswordValidator())
+	service := newRegistrationService(userRepo, tokenRepo, nil)
 
 	if _, err := service.VerifyCode(context.Background(), code); err == nil || !strings.Contains(err.Error(), "consume verification token") {
 		t.Fatalf("expected consume verification token error, got %v", err)

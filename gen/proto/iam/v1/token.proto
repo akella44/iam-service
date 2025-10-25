@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package iam.v1;
+
+option go_package = "github.com/arklim/social-platform-iam/internal/transport/grpc/iamv1;iamv1";
+
+import "google/protobuf/timestamp.proto";
+
+// TokenService provides token validation and revocation for internal services.
+service TokenService {
+  // ValidateToken performs offline validation of a JWT access token.
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // Introspect performs a comprehensive validation including revocation status.
+  rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
+
+  // RevokeByJTI revokes a specific access token by its JWT ID.
+  rpc RevokeByJTI(RevokeByJTIRequest) returns (RevokeResponse);
+
+  // RevokeBySession revokes all tokens associated with a session.
+  rpc RevokeBySession(RevokeBySessionRequest) returns (RevokeResponse);
+
+  // RevokeAllForUser revokes all tokens for the supplied user.
+  rpc RevokeAllForUser(RevokeAllForUserRequest) returns (RevokeResponse);
+}
+
+// ValidateTokenRequest contains the token to validate.
+message ValidateTokenRequest {
+  string token = 1;
+  repeated string expected_audience = 2;
+}
+
+// ValidateTokenResponse contains validation result metadata.
+message ValidateTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  repeated string roles = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string error = 5;
+  string jti = 6;
+  string session_id = 7;
+}
+
+// IntrospectRequest requests detailed token status.
+message IntrospectRequest {
+  string token = 1;
+  optional bool check_revocation = 2;
+}
+
+// IntrospectResponse contains detailed token information.
+message IntrospectResponse {
+  bool active = 1;
+  string user_id = 2;
+  string username = 3;
+  repeated string roles = 4;
+  google.protobuf.Timestamp issued_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp not_before = 7;
+  string jti = 8;
+  string session_id = 9;
+  bool revoked = 10;
+  string revocation_reason = 11;
+  SessionInfo session = 12;
+  string error = 13;
+}
+
+// SessionInfo captures session details relevant for introspection results.
+message SessionInfo {
+  string id = 1;
+  string device_label = 2;
+  string ip_last = 3;
+  google.protobuf.Timestamp last_seen = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool revoked = 6;
+}
+
+// RevokeByJTIRequest revokes a token by JWT ID.
+message RevokeByJTIRequest {
+  string jti = 1;
+  string reason = 2;
+}
+
+// RevokeBySessionRequest revokes tokens bound to a session.
+message RevokeBySessionRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+// RevokeAllForUserRequest revokes all tokens for a user.
+message RevokeAllForUserRequest {
+  string user_id = 1;
+  string reason = 2;
+}
+
+// RevokeResponse conveys revocation outcome.
+message RevokeResponse {
+  bool success = 1;
+  int32 revoked_count = 2;
+  string error = 3;
+}

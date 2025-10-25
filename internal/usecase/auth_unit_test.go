@@ -101,13 +101,39 @@ func (r *testUserRepo) UpdatePassword(context.Context, string, string, string, t
 	return errors.New("unexpected call")
 }
 
+func (r *testUserRepo) AssignRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) RevokeRoles(context.Context, string, []string) error {
+	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) GetUserRoles(context.Context, string) ([]domain.UserRole, error) {
+	return nil, errors.New("unexpected call")
+}
+
+func (r *testUserRepo) ListPasswordHistory(context.Context, string, int) ([]domain.UserPasswordHistory, error) {
+	return nil, errors.New("unexpected call")
+}
+
+func (r *testUserRepo) AddPasswordHistory(context.Context, domain.UserPasswordHistory) error {
+	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) TrimPasswordHistory(context.Context, string, int) error {
+	return errors.New("unexpected call")
+}
+
 type testTokenRepo struct {
 	stored      map[string]domain.RefreshToken
+	storedByID  map[string]domain.RefreshToken
 	lastCreated domain.RefreshToken
 	revokedIDs  []string
 	createErr   error
 	getErr      error
 	revokeErr   error
+	markedUsed  []string
 }
 
 func (r *testTokenRepo) CreateVerification(context.Context, domain.VerificationToken) error {
@@ -141,8 +167,12 @@ func (r *testTokenRepo) CreateRefreshToken(_ context.Context, token domain.Refre
 	if r.stored == nil {
 		r.stored = make(map[string]domain.RefreshToken)
 	}
+	if r.storedByID == nil {
+		r.storedByID = make(map[string]domain.RefreshToken)
+	}
 	r.lastCreated = token
 	r.stored[token.TokenHash] = token
+	r.storedByID[token.ID] = token
 	return nil
 }
 
@@ -162,23 +192,87 @@ func (r *testTokenRepo) RevokeRefreshToken(_ context.Context, id string) error {
 		return r.revokeErr
 	}
 	r.revokedIDs = append(r.revokedIDs, id)
+	if r.storedByID != nil {
+		delete(r.storedByID, id)
+	}
+	if r.stored != nil {
+		for hash, token := range r.stored {
+			if token.ID == id {
+				delete(r.stored, hash)
+				break
+			}
+		}
+	}
 	return nil
+}
+
+func (r *testTokenRepo) MarkRefreshTokenUsed(_ context.Context, refreshTokenID string, usedAt time.Time) error {
+	if r.storedByID == nil {
+		r.storedByID = make(map[string]domain.RefreshToken)
+		for _, token := range r.stored {
+			r.storedByID[token.ID] = token
+		}
+	}
+
+	token, ok := r.storedByID[refreshTokenID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	token.UsedAt = &usedAt
+	r.storedByID[refreshTokenID] = token
+	r.markedUsed = append(r.markedUsed, refreshTokenID)
+	return nil
+}
+
+func (r *testTokenRepo) RevokeRefreshTokensByFamily(_ context.Context, familyID string, _ string) (int, error) {
+	if r.storedByID == nil {
+		return 0, nil
+	}
+	count := 0
+	for id, token := range r.storedByID {
+		if token.FamilyID == familyID {
+			r.revokedIDs = append(r.revokedIDs, id)
+			delete(r.storedByID, id)
+			if r.stored != nil {
+				for hash, storedToken := range r.stored {
+					if storedToken.ID == id {
+						delete(r.stored, hash)
+						break
+					}
+				}
+			}
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (r *testTokenRepo) RevokeRefreshTokensForUser(context.Context, string) error {
 	return errors.New("unexpected call")
 }
 
-func (r *testTokenRepo) StoreAccessTokenJTI(context.Context, domain.AccessTokenJTI) error {
+func (r *testTokenRepo) TrackJTI(context.Context, domain.AccessTokenJTI) error {
 	return errors.New("unexpected call")
 }
 
-func (r *testTokenRepo) BlacklistAccessTokenJTI(context.Context, domain.RevokedAccessTokenJTI) error {
+func (r *testTokenRepo) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
 	return errors.New("unexpected call")
 }
 
-func (r *testTokenRepo) IsAccessTokenJTIRevoked(context.Context, string) (bool, error) {
+func (r *testTokenRepo) RevokeJTIsBySession(context.Context, string, string) (int, error) {
+	return 0, errors.New("unexpected call")
+}
+
+func (r *testTokenRepo) RevokeJTIsForUser(context.Context, string, string) (int, error) {
+	return 0, errors.New("unexpected call")
+}
+
+func (r *testTokenRepo) IsJTIRevoked(context.Context, string) (bool, error) {
 	return false, errors.New("unexpected call")
+}
+
+func (r *testTokenRepo) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
+	return 0, errors.New("unexpected call")
 }
 
 func TestAuthService_IssueRefreshToken(t *testing.T) {
@@ -199,7 +293,7 @@ func TestAuthService_IssueRefreshToken(t *testing.T) {
 	}
 
 	tokens := &testTokenRepo{}
-	service, err := NewAuthService(cfg, &testUserRepo{}, nil, nil, nil, tokens, tokenGenerator, keyProvider)
+	service, err := NewAuthService(cfg, &testUserRepo{}, nil, nil, nil, tokens, tokenGenerator, keyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
@@ -276,7 +370,7 @@ func TestAuthService_RefreshAccessToken_Success(t *testing.T) {
 		},
 	}}
 
-	service, err := NewAuthService(cfg, userRepo, nil, nil, nil, tokens, tokenGenerator, keyProvider)
+	service, err := NewAuthService(cfg, userRepo, nil, nil, nil, tokens, tokenGenerator, keyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
@@ -333,7 +427,7 @@ func TestAuthService_RefreshAccessToken_Invalid(t *testing.T) {
 	}
 
 	tokens := &testTokenRepo{}
-	service, err := NewAuthService(cfg, &testUserRepo{users: map[string]domain.User{}}, nil, nil, nil, tokens, tokenGenerator, keyProvider)
+	service, err := NewAuthService(cfg, &testUserRepo{users: map[string]domain.User{}}, nil, nil, nil, tokens, tokenGenerator, keyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
@@ -360,7 +454,7 @@ func TestAuthService_ParseAccessToken_Success(t *testing.T) {
 		t.Fatalf("NewTokenGenerator failed: %v", err)
 	}
 
-	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider)
+	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
@@ -432,7 +526,7 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("NewTokenGenerator failed: %v", err)
 	}
 
-	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider)
+	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
@@ -451,7 +545,7 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("failed to get signing key: %v", err)
 	}
 
-	expiredClaims := AccessTokenClaims{
+	expiredClaims := security.AccessTokenClaims{
 		Roles:  []string{"user"},
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -484,7 +578,7 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 	otherService, err := NewAuthService(&config.AppConfig{
 		App: config.AppSettings{Name: "other", Env: "development"},
 		JWT: config.JWTSettings{KeyDirectory: otherKeyDir},
-	}, nil, nil, nil, nil, nil, otherTokenGenerator, otherKeyProvider)
+	}, nil, nil, nil, nil, nil, otherTokenGenerator, otherKeyProvider, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAuthService for otherService failed: %v", err)
 	}
@@ -494,7 +588,7 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("failed to get other signing key: %v", err)
 	}
 
-	foreignClaims := AccessTokenClaims{
+	foreignClaims := security.AccessTokenClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   security.HashToken(userID + ":" + otherService.cfg.App.Name),

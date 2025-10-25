@@ -3,12 +3,18 @@ package security
 import (
 	"errors"
 	"testing"
+
+	zxcvbn "github.com/nbutton23/zxcvbn-go"
 )
 
 func TestDefaultPasswordValidatorSuccess(t *testing.T) {
 	validator := DefaultPasswordValidator()
 
-	if err := validator.Validate("StrongPass123"); err != nil {
+	password := "C0mplex!Passphrase#2025"
+	if strength := zxcvbn.PasswordStrength(password, nil); strength.Score < defaultMinZxcvbnScore {
+		t.Fatalf("test password unexpectedly weak: score=%d", strength.Score)
+	}
+	if err := validator.Validate(password); err != nil {
 		t.Fatalf("expected password to pass validation, got %v", err)
 	}
 }
@@ -16,29 +22,23 @@ func TestDefaultPasswordValidatorSuccess(t *testing.T) {
 func TestDefaultPasswordValidatorViolations(t *testing.T) {
 	validator := DefaultPasswordValidator()
 
-	if err := validator.Validate("short1"); err == nil {
-		t.Fatalf("expected validation error for short password")
-	} else {
+	assertViolation := func(password, expectedCode string) {
+		err := validator.Validate(password)
+		if err == nil {
+			t.Fatalf("expected validation error for %s", expectedCode)
+		}
 		var vErr *PasswordValidationError
 		if !errors.As(err, &vErr) {
 			t.Fatalf("expected PasswordValidationError, got %T", err)
 		}
-		if vErr.Code != "min_length" {
-			t.Fatalf("expected min_length code, got %s", vErr.Code)
+		if vErr.Code != expectedCode {
+			t.Fatalf("expected %s code, got %s", expectedCode, vErr.Code)
 		}
 	}
 
-	if err := validator.Validate("LongPassword"); err == nil {
-		t.Fatalf("expected validation error for missing digit")
-	} else {
-		var vErr *PasswordValidationError
-		if !errors.As(err, &vErr) {
-			t.Fatalf("expected PasswordValidationError, got %T", err)
-		}
-		if vErr.Code != "digit" {
-			t.Fatalf("expected digit code, got %s", vErr.Code)
-		}
-	}
+	assertViolation("Short1!", "min_length")
+	assertViolation("lowercasepassword", "character_classes")
+	assertViolation("Password123", "weak_password")
 }
 
 func TestCustomPasswordValidator(t *testing.T) {

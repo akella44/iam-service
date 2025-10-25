@@ -46,46 +46,9 @@ type LoginAttempt struct {
 	CreatedAt       time.Time
 }
 
-// RefreshToken represents a persisted refresh token (stored as a hash).
-type RefreshToken struct {
-	ID        string
-	UserID    string
-	TokenHash string
-	ClientID  *string
-	IP        *string
-	UserAgent *string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	RevokedAt *time.Time
-	Metadata  map[string]any
-}
-
-// PasswordResetToken represents a single-use password reset token hash.
-type PasswordResetToken struct {
-	ID        string
-	UserID    string
-	TokenHash string
-	IP        *string
-	UserAgent *string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	UsedAt    *time.Time
-	RevokedAt *time.Time
-	Metadata  map[string]any
-}
-
-// VerificationToken captures email or other verification flows.
-type VerificationToken struct {
-	ID        string
-	UserID    string
-	TokenHash string
-	Purpose   string
-	NewEmail  *string
-	IP        *string
-	UserAgent *string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	UsedAt    *time.Time
-	RevokedAt *time.Time
-	Metadata  map[string]any
+// PasswordContext carries identifying information to strengthen password policy checks.
+type PasswordContext struct {
+	Username string
+	Email    string
+	Phone    *string
 }

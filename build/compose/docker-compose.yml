@@ -24,6 +24,61 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis service (T015)
+  redis:
+    image: redis:7-alpine
+    container_name: iam-redis
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -n "${REDIS_PASSWORD}" ]; then
+          exec redis-server --requirepass "${REDIS_PASSWORD}";
+        else
+          exec redis-server;
+        fi
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"${REDIS_PASSWORD}\" ]; then redis-cli -a \"${REDIS_PASSWORD}\" ping; else redis-cli ping; fi"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Zookeeper for Kafka (T016 - optional for local dev)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: iam-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    profiles:
+      - kafka
+
+  # Kafka service (T016 - optional for local dev)
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: iam-kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.19.145:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    profiles:
+      - kafka
+
   iam-dev:
     build:
       context: ../../
@@ -38,6 +93,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -50,3 +107,4 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:

@@ -111,10 +111,10 @@ func (r *RoleRepository) GetByName(ctx context.Context, name string) (*domain.Ro
 	return &role, nil
 }
 
-// AttachPermissions links the provided permissions to the role.
-func (r *RoleRepository) AttachPermissions(ctx context.Context, roleID string, permissionIDs []string) error {
+// AssignPermissions links the provided permissions to the role and returns the number of rows inserted.
+func (r *RoleRepository) AssignPermissions(ctx context.Context, roleID string, permissionIDs []string) (int, error) {
 	if len(permissionIDs) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	query := r.builder.Insert("iam.role_permissions").
@@ -126,14 +126,90 @@ func (r *RoleRepository) AttachPermissions(ctx context.Context, roleID string, p
 
 	stmt, args, err := query.Suffix("ON CONFLICT DO NOTHING").ToSql()
 	if err != nil {
-		return fmt.Errorf("build attach role permissions sql: %w", err)
+		return 0, fmt.Errorf("build assign role permissions sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
-		return fmt.Errorf("attach role permissions: %w", err)
+	res, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return 0, fmt.Errorf("assign role permissions: %w", err)
 	}
 
-	return nil
+	return int(res.RowsAffected()), nil
+}
+
+// RevokePermissions removes the provided permissions from the role and returns the number of rows deleted.
+func (r *RoleRepository) RevokePermissions(ctx context.Context, roleID string, permissionIDs []string) (int, error) {
+	if len(permissionIDs) == 0 {
+		return 0, nil
+	}
+
+	stmt, args, err := r.builder.Delete("iam.role_permissions").
+		Where(squirrel.Eq{"role_id": roleID}).
+		Where(squirrel.Eq{"permission_id": permissionIDs}).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("build revoke role permissions sql: %w", err)
+	}
+
+	res, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return 0, fmt.Errorf("revoke role permissions: %w", err)
+	}
+
+	return int(res.RowsAffected()), nil
+}
+
+// GetRolePermissions returns the permissions currently attached to the role.
+func (r *RoleRepository) GetRolePermissions(ctx context.Context, roleID string) ([]domain.Permission, error) {
+	stmt, args, err := r.builder.Select(
+		"p.id",
+		"p.name",
+		"p.service_namespace",
+		"p.action",
+		"p.description",
+	).
+		From("iam.permissions p").
+		Join("iam.role_permissions rp ON rp.permission_id = p.id").
+		Where(squirrel.Eq{"rp.role_id": roleID}).
+		OrderBy("p.service_namespace ASC", "p.action ASC").
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("build role permissions sql: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query role permissions: %w", err)
+	}
+	defer rows.Close()
+
+	permissions := make([]domain.Permission, 0)
+	for rows.Next() {
+		var (
+			permission  domain.Permission
+			description sql.NullString
+		)
+		if err := rows.Scan(
+			&permission.ID,
+			&permission.Name,
+			&permission.ServiceNamespace,
+			&permission.Action,
+			&description,
+		); err != nil {
+			return nil, fmt.Errorf("scan role permission: %w", err)
+		}
+		if description.Valid {
+			desc := description.String
+			permission.Description = &desc
+		}
+		permissions = append(permissions, permission)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate role permissions: %w", err)
+	}
+
+	return permissions, nil
 }
 
 // AssignToUsers assigns the role to the provided user IDs.

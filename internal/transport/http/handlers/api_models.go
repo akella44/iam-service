@@ -42,16 +42,29 @@ type UserSummary struct {
 
 // AuthLoginRequest defines the payload for the login endpoint.
 type AuthLoginRequest struct {
-	Identifier string `json:"identifier" binding:"required"`
-	Password   string `json:"password" binding:"required"`
+	Identifier  string `json:"identifier" binding:"required"`
+	Password    string `json:"password" binding:"required"`
+	DeviceID    string `json:"device_id"`
+	DeviceLabel string `json:"device_label"`
+}
+
+// SessionSummary provides a compact view of session context in login responses.
+type SessionSummary struct {
+	ID          string    `json:"id"`
+	DeviceLabel *string   `json:"device_label,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LastSeen    time.Time `json:"last_seen"`
 }
 
 // AuthLoginResponse describes the response returned for a successful login.
 type AuthLoginResponse struct {
-	AccessToken  string      `json:"access_token"`
-	TokenType    string      `json:"token_type"`
-	RefreshToken string      `json:"refresh_token"`
-	User         UserSummary `json:"user"`
+	AccessToken  string         `json:"access_token"`
+	RefreshToken string         `json:"refresh_token"`
+	TokenType    string         `json:"token_type"`
+	ExpiresIn    int            `json:"expires_in"`
+	User         UserSummary    `json:"user"`
+	Session      SessionSummary `json:"session"`
 }
 
 // AuthPendingResponse is returned when a login requires additional verification.
@@ -70,6 +83,7 @@ type TokenRefreshResponse struct {
 	AccessToken  string       `json:"access_token"`
 	RefreshToken string       `json:"refresh_token"`
 	TokenType    string       `json:"token_type"`
+	ExpiresIn    int          `json:"expires_in,omitempty"`
 	User         *UserSummary `json:"user,omitempty"`
 }
 
@@ -179,6 +193,8 @@ type SessionPayload struct {
 	ExpiresAt      time.Time  `json:"expires_at"`
 	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
 	RevokeReason   *string    `json:"revoke_reason,omitempty"`
+	IsActive       bool       `json:"is_active"`
+	IsCurrent      bool       `json:"is_current,omitempty"`
 }
 
 // SessionValidateRequest contains the session ID to validate
@@ -195,6 +211,14 @@ type SessionValidateResponse struct {
 // SessionListResponse wraps a list of sessions for a user.
 type SessionListResponse struct {
 	Sessions []SessionPayload `json:"sessions"`
+	Total    int              `json:"total"`
+}
+
+// SessionBulkRevokeResponse summarises bulk revocation operations.
+type SessionBulkRevokeResponse struct {
+	RevokedCount  int    `json:"revoked_count"`
+	TokensRevoked int    `json:"tokens_revoked,omitempty"`
+	Message       string `json:"message,omitempty"`
 }
 
 // SessionRevokeRequest contains the session revocation payload.
@@ -217,21 +241,27 @@ type PasswordChangeRequest struct {
 
 // PasswordChangeResponse conveys the result of a password change.
 type PasswordChangeResponse struct {
-	Changed bool `json:"changed"`
+	Message         string    `json:"message"`
+	ChangedAt       time.Time `json:"changed_at"`
+	RevokedSessions int       `json:"revoked_sessions"`
+	RevokedTokens   int       `json:"revoked_tokens"`
 }
 
 // PasswordResetRequest represents a password reset initiation payload.
 type PasswordResetRequest struct {
-	Identifier string `json:"identifier" binding:"required"`
+	EmailOrPhone string `json:"email_or_phone" binding:"required"`
 }
 
 // PasswordResetResponse returns information about the generated reset artifact.
 type PasswordResetResponse struct {
-	Delivery  string `json:"delivery"`
-	ExpiresAt string `json:"expires_at"`
+	Message           string     `json:"message"`
+	RequestID         string     `json:"request_id,omitempty"`
+	Delivery          string     `json:"delivery,omitempty"`
+	MaskedDestination string     `json:"masked_destination,omitempty"`
+	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
 	// SECURITY: DevToken and DevCode are ONLY exposed in development mode
-	DevToken *string `json:"dev_token,omitempty"` // Development only
-	DevCode  *string `json:"dev_code,omitempty"`  // Development only
+	DevToken *string `json:"dev_token,omitempty"`
+	DevCode  *string `json:"dev_code,omitempty"`
 }
 
 // PasswordResetConfirmRequest captures a password reset confirmation payload.
@@ -243,13 +273,40 @@ type PasswordResetConfirmRequest struct {
 
 // PasswordResetConfirmResponse indicates that a password reset completed successfully.
 type PasswordResetConfirmResponse struct {
-	Reset bool `json:"reset"`
+	Message         string    `json:"message"`
+	UserID          string    `json:"user_id"`
+	ChangedAt       time.Time `json:"changed_at"`
+	RevokedSessions int       `json:"revoked_sessions"`
+	RevokedTokens   int       `json:"revoked_tokens"`
 }
 
 // HealthResponse describes the service health payload.
 type HealthResponse struct {
 	Status    string    `json:"status"`
 	StartedAt time.Time `json:"started_at"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ReadyResponse describes readiness probe results with dependency checks.
+type ReadyResponse struct {
+	Status    string            `json:"status"`
+	Checks    map[string]string `json:"checks,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
+}
+
+// JWKSKey describes an individual JSON Web Key in the JWKS response.
+type JWKSKey struct {
+	Kty string `json:"kty"`
+	Use string `json:"use"`
+	Alg string `json:"alg"`
+	Kid string `json:"kid"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
+// JWKSResponse represents the JSON Web Key Set payload.
+type JWKSResponse struct {
+	Keys []JWKSKey `json:"keys"`
 }
 
 // newUserSummary converts a domain user to a summary suitable for API responses.
@@ -288,6 +345,7 @@ func newSessionPayload(session domain.Session) SessionPayload {
 		CreatedAt: session.CreatedAt,
 		LastSeen:  session.LastSeen,
 		ExpiresAt: session.ExpiresAt,
+		IsActive:  session.IsActive(time.Now().UTC()),
 	}
 
 	if session.RefreshTokenID != nil {
@@ -316,4 +374,19 @@ func newSessionPayload(session domain.Session) SessionPayload {
 	}
 
 	return payload
+}
+
+func newSessionSummary(session domain.Session) SessionSummary {
+	summary := SessionSummary{
+		ID:        session.ID,
+		CreatedAt: session.CreatedAt,
+		ExpiresAt: session.ExpiresAt,
+		LastSeen:  session.LastSeen,
+	}
+
+	if session.DeviceLabel != nil {
+		summary.DeviceLabel = session.DeviceLabel
+	}
+
+	return summary
 }

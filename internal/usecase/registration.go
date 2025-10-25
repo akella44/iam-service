@@ -20,6 +20,7 @@ const (
 	verificationDeliveryEmail       = "email"
 	verificationDeliveryPhone       = "sms"
 	defaultVerificationTTL          = 24 * time.Hour
+	defaultPasswordHistoryEntries   = 5
 )
 
 var (
@@ -33,17 +34,42 @@ var (
 
 // RegistrationService handles new account onboarding.
 type RegistrationService struct {
-	users             port.UserRepository
-	tokens            port.TokenRepository
-	passwordValidator *security.PasswordValidator
+	users          port.UserRepository
+	tokens         port.TokenRepository
+	events         port.EventPublisher
+	passwordPolicy port.PasswordPolicyValidator
+	now            func() time.Time
+	historyLimit   int
 }
 
 // NewRegistrationService constructs a registration service.
-func NewRegistrationService(users port.UserRepository, tokens port.TokenRepository, validator *security.PasswordValidator) *RegistrationService {
-	if validator == nil {
-		validator = security.DefaultPasswordValidator()
+func NewRegistrationService(users port.UserRepository, tokens port.TokenRepository, policy port.PasswordPolicyValidator, events port.EventPublisher) *RegistrationService {
+	if policy == nil {
+		policy = security.NewPasswordPolicy()
 	}
-	return &RegistrationService{users: users, tokens: tokens, passwordValidator: validator}
+	service := &RegistrationService{
+		users:          users,
+		tokens:         tokens,
+		events:         events,
+		passwordPolicy: policy,
+		now:            time.Now,
+		historyLimit:   defaultPasswordHistoryEntries,
+	}
+	return service
+}
+
+// WithClock overrides the time source for deterministic testing.
+func (s *RegistrationService) WithClock(clock func() time.Time) {
+	if clock != nil {
+		s.now = clock
+	}
+}
+
+// WithHistoryLimit adjusts the maximum number of historical passwords considered during validation.
+func (s *RegistrationService) WithHistoryLimit(limit int) {
+	if limit >= 0 {
+		s.historyLimit = limit
+	}
 }
 
 // RegistrationVerification captures the verification artifact for a newly registered user.
@@ -60,11 +86,13 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 	if username == "" {
 		return domain.User{}, zero, fmt.Errorf("username is required")
 	}
+
 	trimmedEmail := strings.TrimSpace(email)
 	trimmedPhone := strings.TrimSpace(phone)
 	if trimmedEmail == "" && trimmedPhone == "" {
 		return domain.User{}, zero, fmt.Errorf("email or phone is required")
 	}
+
 	password = strings.TrimSpace(password)
 	if password == "" {
 		return domain.User{}, zero, fmt.Errorf("password is required")
@@ -73,8 +101,22 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 		return domain.User{}, zero, fmt.Errorf("token repository not configured")
 	}
 
-	if err := s.passwordValidator.Validate(password); err != nil {
+	phoneCtx := trimmedPhone
+	passwordCtx := domain.PasswordContext{
+		Username: username,
+		Email:    trimmedEmail,
+	}
+	if trimmedPhone != "" {
+		passwordCtx.Phone = &phoneCtx
+	}
+
+	if err := s.passwordPolicy.Validate(password, passwordCtx); err != nil {
 		return domain.User{}, zero, fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
+	}
+
+	userID := uuid.NewString()
+	if err := s.checkPasswordHistory(ctx, userID, password); err != nil {
+		return domain.User{}, zero, err
 	}
 
 	passwordHash, err := security.HashPassword(password)
@@ -82,9 +124,9 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 		return domain.User{}, zero, fmt.Errorf("hash password: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	user := domain.User{
-		ID:                 uuid.NewString(),
+		ID:                 userID,
 		Username:           username,
 		Email:              trimmedEmail,
 		PasswordHash:       passwordHash,
@@ -99,6 +141,10 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 	}
 
 	if err := s.users.Create(ctx, user); err != nil {
+		return domain.User{}, zero, err
+	}
+
+	if err := s.storePasswordHistory(ctx, user); err != nil {
 		return domain.User{}, zero, err
 	}
 
@@ -156,7 +202,113 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 		return domain.User{}, zero, fmt.Errorf("no contact method available")
 	}
 
+	s.publishUserRegistered(ctx, user, result.Delivery)
+
 	return user, result, nil
+}
+
+func (s *RegistrationService) checkPasswordHistory(ctx context.Context, userID, password string) error {
+	if s.users == nil {
+		return nil
+	}
+
+	trimmedID := strings.TrimSpace(userID)
+	if trimmedID == "" {
+		return nil
+	}
+
+	history, err := s.users.ListPasswordHistory(ctx, trimmedID, s.historyLimit)
+	if err != nil {
+		return fmt.Errorf("list password history: %w", err)
+	}
+
+	for _, entry := range history {
+		matches, err := security.VerifyPassword(password, entry.PasswordHash)
+		if err != nil {
+			return fmt.Errorf("compare password history: %w", err)
+		}
+		if matches {
+			return fmt.Errorf("%w: cannot reuse recent password", ErrPasswordPolicyViolation)
+		}
+	}
+
+	return nil
+}
+
+func (s *RegistrationService) publishUserRegistered(ctx context.Context, user domain.User, delivery string) {
+	if s.events == nil {
+		return
+	}
+
+	method := delivery
+	if method == "" {
+		switch {
+		case strings.TrimSpace(user.Email) != "":
+			method = verificationDeliveryEmail
+		case user.Phone != nil && strings.TrimSpace(*user.Phone) != "":
+			method = verificationDeliveryPhone
+		default:
+			method = "unknown"
+		}
+	}
+
+	event := domain.UserRegisteredEvent{
+		EventID:            uuid.NewString(),
+		UserID:             user.ID,
+		Username:           user.Username,
+		Status:             string(user.Status),
+		RegisteredAt:       user.RegisteredAt,
+		RegistrationMethod: method,
+		Metadata: map[string]any{
+			"verification_delivery": delivery,
+		},
+	}
+
+	if email := strings.TrimSpace(user.Email); email != "" {
+		emailCopy := email
+		event.Email = &emailCopy
+	}
+
+	if user.Phone != nil {
+		trimmed := strings.TrimSpace(*user.Phone)
+		if trimmed != "" {
+			phoneCopy := trimmed
+			event.Phone = &phoneCopy
+		}
+	}
+
+	if err := s.events.PublishUserRegistered(ctx, event); err != nil {
+		// TODO: add structured logging once logger dependency is available
+	}
+}
+
+func (s *RegistrationService) storePasswordHistory(ctx context.Context, user domain.User) error {
+	if s.users == nil {
+		return nil
+	}
+
+	entry := domain.UserPasswordHistory{
+		ID:           uuid.NewString(),
+		UserID:       user.ID,
+		PasswordHash: user.PasswordHash,
+		SetAt:        user.LastPasswordChange,
+	}
+
+	if entry.SetAt.IsZero() {
+		entry.SetAt = s.now().UTC()
+	}
+
+	if err := s.users.AddPasswordHistory(ctx, entry); err != nil {
+		return fmt.Errorf("store password history: %w", err)
+	}
+
+	if s.historyLimit > 0 {
+		if err := s.users.TrimPasswordHistory(ctx, user.ID, s.historyLimit); err != nil {
+			return fmt.Errorf("trim password history: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // VerifyCode validates the provided verification code and activates the user.

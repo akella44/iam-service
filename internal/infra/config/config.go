@@ -11,9 +11,13 @@ import (
 type AppConfig struct {
 	App       AppSettings       `mapstructure:"app"`
 	Postgres  PostgresSettings  `mapstructure:"postgres"`
+	Redis     RedisSettings     `mapstructure:"redis"`
+	Kafka     KafkaSettings     `mapstructure:"kafka"`
 	JWT       JWTSettings       `mapstructure:"jwt"`
 	GRPC      GRPCSettings      `mapstructure:"grpc"`
 	Telemetry TelemetrySettings `mapstructure:"telemetry"`
+	RateLimit RateLimitSettings `mapstructure:"rate_limit"`
+	Argon2    Argon2Settings    `mapstructure:"argon2"`
 }
 
 type AppSettings struct {
@@ -42,6 +46,40 @@ type PostgresSettings struct {
 	HealthCheckPeriod time.Duration `mapstructure:"health_check_period"`
 }
 
+// RedisSettings configures Redis connection and TLS
+type RedisSettings struct {
+	Host       string `mapstructure:"host"`
+	Port       int    `mapstructure:"port"`
+	DB         int    `mapstructure:"db"`
+	Password   string `mapstructure:"password"`
+	TLSEnabled bool   `mapstructure:"tls_enabled"`
+}
+
+// KafkaSettings configures Kafka producer
+type KafkaSettings struct {
+	Brokers     []string `mapstructure:"brokers"`
+	TopicPrefix string   `mapstructure:"topic_prefix"`
+	Async       bool     `mapstructure:"async"`
+}
+
+// RateLimitSettings configures rate limiting windows and max attempts per endpoint
+type RateLimitSettings struct {
+	WindowDuration           time.Duration `mapstructure:"window_duration"`
+	LoginMaxAttempts         int           `mapstructure:"login_max_attempts"`
+	RegisterMaxAttempts      int           `mapstructure:"register_max_attempts"`
+	RefreshMaxAttempts       int           `mapstructure:"refresh_max_attempts"`
+	PasswordResetMaxAttempts int           `mapstructure:"password_reset_max_attempts"`
+}
+
+// Argon2Settings configures Argon2id password hashing parameters
+type Argon2Settings struct {
+	Memory      uint32 `mapstructure:"memory"`
+	Iterations  uint32 `mapstructure:"iterations"`
+	Parallelism uint8  `mapstructure:"parallelism"`
+	SaltLength  uint32 `mapstructure:"salt_length"`
+	KeyLength   uint32 `mapstructure:"key_length"`
+}
+
 type JWTSettings struct {
 	KeyDirectory    string        `mapstructure:"key_directory"`
 	AccessTokenTTL  time.Duration `mapstructure:"access_token_ttl"`
@@ -49,8 +87,11 @@ type JWTSettings struct {
 }
 
 type TelemetrySettings struct {
-	MetricsPort     int    `mapstructure:"metrics_port"`
-	TracingEndpoint string `mapstructure:"tracing_endpoint"`
+	MetricsPort     int     `mapstructure:"metrics_port"`
+	TracingEndpoint string  `mapstructure:"tracing_endpoint"`
+	OTLPEndpoint    string  `mapstructure:"otlp_endpoint"`
+	ServiceName     string  `mapstructure:"service_name"`
+	SamplingRate    float64 `mapstructure:"sampling_rate"`
 }
 
 func Load() (*AppConfig, error) {
@@ -79,11 +120,32 @@ func Load() (*AppConfig, error) {
 		"postgres.max_conn_lifetime",
 		"postgres.max_conn_idle_time",
 		"postgres.health_check_period",
+		"redis.host",
+		"redis.port",
+		"redis.db",
+		"redis.password",
+		"redis.tls_enabled",
+		"kafka.brokers",
+		"kafka.topic_prefix",
+		"kafka.async",
 		"jwt.key_directory",
 		"jwt.access_token_ttl",
 		"jwt.refresh_token_ttl",
 		"telemetry.metrics_port",
 		"telemetry.tracing_endpoint",
+		"telemetry.otlp_endpoint",
+		"telemetry.service_name",
+		"telemetry.sampling_rate",
+		"rate_limit.window_duration",
+		"rate_limit.login_max_attempts",
+		"rate_limit.register_max_attempts",
+		"rate_limit.refresh_max_attempts",
+		"rate_limit.password_reset_max_attempts",
+		"argon2.memory",
+		"argon2.iterations",
+		"argon2.parallelism",
+		"argon2.salt_length",
+		"argon2.key_length",
 	}); err != nil {
 		return nil, err
 	}
@@ -119,12 +181,42 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("postgres.max_conn_idle_time", "15m")
 	v.SetDefault("postgres.health_check_period", "30s")
 
+	// Redis defaults (T006)
+	v.SetDefault("redis.host", "localhost")
+	v.SetDefault("redis.port", 6379)
+	v.SetDefault("redis.db", 0)
+	v.SetDefault("redis.password", "")
+	v.SetDefault("redis.tls_enabled", false)
+
+	// Kafka defaults (T007)
+	v.SetDefault("kafka.brokers", []string{"localhost:9092"})
+	v.SetDefault("kafka.topic_prefix", "iam")
+	v.SetDefault("kafka.async", true)
+
 	v.SetDefault("jwt.key_directory", "./secrets")
 	v.SetDefault("jwt.access_token_ttl", "15m")
 	v.SetDefault("jwt.refresh_token_ttl", "168h")
 
 	v.SetDefault("telemetry.metrics_port", 9090)
 	v.SetDefault("telemetry.tracing_endpoint", "http://localhost:4317")
+	// OpenTelemetry defaults (T010)
+	v.SetDefault("telemetry.otlp_endpoint", "http://localhost:4318")
+	v.SetDefault("telemetry.service_name", "iam-service")
+	v.SetDefault("telemetry.sampling_rate", 1.0)
+
+	// Rate limiting defaults (T008)
+	v.SetDefault("rate_limit.window_duration", "1m")
+	v.SetDefault("rate_limit.login_max_attempts", 5)
+	v.SetDefault("rate_limit.register_max_attempts", 3)
+	v.SetDefault("rate_limit.refresh_max_attempts", 10)
+	v.SetDefault("rate_limit.password_reset_max_attempts", 3)
+
+	// Argon2id defaults (T009)
+	v.SetDefault("argon2.memory", 65536) // 64 MB
+	v.SetDefault("argon2.iterations", 3)
+	v.SetDefault("argon2.parallelism", 4)
+	v.SetDefault("argon2.salt_length", 16)
+	v.SetDefault("argon2.key_length", 32)
 }
 
 func bindEnvs(v *viper.Viper, keys []string) error {

@@ -6,14 +6,15 @@ import (
 	"github.com/arklim/social-platform-iam/internal/core/domain"
 )
 
-// SessionRepository deals with session storage.
+// SessionRepository provides persistence operations for session aggregates.
 type SessionRepository interface {
 	Create(ctx context.Context, session domain.Session) error
-	Touch(ctx context.Context, sessionID string, ip *string, userAgent *string) error
+	Get(ctx context.Context, sessionID string) (*domain.Session, error)
+	ListByUser(ctx context.Context, userID string) ([]domain.Session, error)
+	UpdateLastSeen(ctx context.Context, sessionID string, ip *string, userAgent *string) error
 	Revoke(ctx context.Context, sessionID string, reason string) error
+	RevokeByFamily(ctx context.Context, familyID string, reason string) (int, error)
 	RevokeAllForUser(ctx context.Context, userID string, reason string) (int, error)
 	StoreEvent(ctx context.Context, event domain.SessionEvent) error
 	RevokeSessionAccessTokens(ctx context.Context, sessionID string, reason string) (int, error)
-	GetByID(ctx context.Context, sessionID string) (*domain.Session, error)
-	ListActiveByUser(ctx context.Context, userID string) ([]domain.Session, error)
 }
