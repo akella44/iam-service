@@ -17,6 +17,7 @@ import (
 	uuid "github.com/google/uuid"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/config"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
@@ -123,6 +124,22 @@ func (r *testUserRepo) AddPasswordHistory(context.Context, domain.UserPasswordHi
 
 func (r *testUserRepo) TrimPasswordHistory(context.Context, string, int) error {
 	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call")
+}
+
+func (r *testUserRepo) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call")
+}
+
+func (r *testUserRepo) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call")
 }
 
 type testTokenRepo struct {

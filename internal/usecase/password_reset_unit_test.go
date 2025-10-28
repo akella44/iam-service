@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
 )
@@ -106,6 +107,22 @@ func (m *passwordResetUserRepoMock) TrimPasswordHistory(_ context.Context, userI
 	}
 	m.trimHistoryCalls++
 	return nil
+}
+
+func (m *passwordResetUserRepoMock) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call: Update")
+}
+
+func (m *passwordResetUserRepoMock) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call: SoftDelete")
+}
+
+func (m *passwordResetUserRepoMock) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call: List")
+}
+
+func (m *passwordResetUserRepoMock) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count")
 }
 
 type passwordResetTokenRepoMock struct {

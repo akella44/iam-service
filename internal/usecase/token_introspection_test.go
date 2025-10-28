@@ -209,6 +209,12 @@ func (u *userRepositoryStub) AddPasswordHistory(context.Context, domain.UserPass
 	return nil
 }
 func (u *userRepositoryStub) TrimPasswordHistory(context.Context, string, int) error { return nil }
+func (u *userRepositoryStub) Update(context.Context, domain.User) error              { return nil }
+func (u *userRepositoryStub) SoftDelete(context.Context, string) error               { return nil }
+func (u *userRepositoryStub) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, nil
+}
+func (u *userRepositoryStub) Count(context.Context, port.UserFilter) (int, error) { return 0, nil }
 
 var _ RevocationStore = (*revocationStoreStub)(nil)
 var _ port.TokenRepository = (*tokenRepositoryStub)(nil)

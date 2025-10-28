@@ -111,6 +111,82 @@ func (r *RoleRepository) GetByName(ctx context.Context, name string) (*domain.Ro
 	return &role, nil
 }
 
+// GetByID retrieves a role by its ID.
+func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, error) {
+	stmt, args, err := r.builder.Select("id", "name", "description").
+		From("iam.roles").
+		Where(squirrel.Eq{"id": id}).
+		Limit(1).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("build select role by id sql: %w", err)
+	}
+
+	row := r.pool.QueryRow(ctx, stmt, args...)
+
+	var (
+		role        domain.Role
+		description sql.NullString
+	)
+
+	if err := row.Scan(&role.ID, &role.Name, &description); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, repository.ErrNotFound
+		}
+		return nil, fmt.Errorf("scan role by id: %w", err)
+	}
+
+	if description.Valid {
+		role.Description = &description.String
+	}
+
+	return &role, nil
+}
+
+// Update modifies an existing role.
+func (r *RoleRepository) Update(ctx context.Context, role domain.Role) error {
+	stmt, args, err := r.builder.Update("iam.roles").
+		Set("name", role.Name).
+		Set("description", role.Description).
+		Where(squirrel.Eq{"id": role.ID}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("build update role sql: %w", err)
+	}
+
+	res, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("update role: %w", err)
+	}
+
+	if res.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
+// Delete removes a role by ID (cascades to user_roles and role_permissions via FK).
+func (r *RoleRepository) Delete(ctx context.Context, id string) error {
+	stmt, args, err := r.builder.Delete("iam.roles").
+		Where(squirrel.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("build delete role sql: %w", err)
+	}
+
+	res, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("delete role: %w", err)
+	}
+
+	if res.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
 // AssignPermissions links the provided permissions to the role and returns the number of rows inserted.
 func (r *RoleRepository) AssignPermissions(ctx context.Context, roleID string, permissionIDs []string) (int, error) {
 	if len(permissionIDs) == 0 {

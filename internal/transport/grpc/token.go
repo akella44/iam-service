@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/transport/grpc/iamv1"
 	"github.com/arklim/social-platform-iam/internal/usecase"
 )
@@ -17,16 +18,17 @@ import (
 type TokenServer struct {
 	iamv1.UnimplementedTokenServiceServer
 	service *usecase.TokenService
+	jwtManager *security.JWTManager
 	logger  *zap.Logger
 }
 
 // NewTokenServer constructs a gRPC token server backed by the supplied use case.
-func NewTokenServer(service *usecase.TokenService, logger *zap.Logger) *TokenServer {
+func NewTokenServer(service *usecase.TokenService, jwtManager *security.JWTManager, logger *zap.Logger) *TokenServer {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
-	return &TokenServer{service: service, logger: logger}
+	return &TokenServer{service: service, jwtManager: jwtManager, logger: logger}
 }
 
 // ValidateToken performs offline token validation using the TokenService.
@@ -219,4 +221,25 @@ func (s *TokenServer) RevokeAllForUser(ctx context.Context, req *iamv1.RevokeAll
 	resp.Success = true
 	resp.RevokedCount = int32(count)
 	return resp, nil
+}
+
+// GetJWKS returns the JSON Web Key Set for offline JWT validation.
+func (s *TokenServer) GetJWKS(ctx context.Context, req *iamv1.GetJWKSRequest) (*iamv1.GetJWKSResponse, error) {
+s.logger.Info("GetJWKS called")
+resp := &iamv1.GetJWKSResponse{}
+
+if s == nil || s.jwtManager == nil {
+s.logger.Error("JWKS not available - manager is nil")
+return nil, errors.New("jwks not available")
+}
+
+jwksJSON, err := s.jwtManager.JWKS()
+if err != nil {
+s.logger.Error("failed to generate JWKS", zap.Error(err))
+return nil, errors.New("failed to generate jwks")
+}
+
+s.logger.Info("JWKS generated successfully", zap.Int("json_length", len(jwksJSON)))
+resp.JwksJson = string(jwksJSON)
+return resp, nil
 }

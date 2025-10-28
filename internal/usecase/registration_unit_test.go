@@ -119,6 +119,22 @@ func (m *mockUserRepository) TrimPasswordHistory(_ context.Context, userID strin
 	return m.trimHistoryErr
 }
 
+func (m *mockUserRepository) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call: Update")
+}
+
+func (m *mockUserRepository) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call: SoftDelete")
+}
+
+func (m *mockUserRepository) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call: List")
+}
+
+func (m *mockUserRepository) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count")
+}
+
 type mockTokenRepository struct {
 	createVerificationErr error
 	createCalls           int
@@ -241,6 +257,10 @@ func (m *mockEventPublisher) PublishPasswordResetRequested(context.Context, doma
 }
 
 func (m *mockEventPublisher) PublishRolesAssigned(context.Context, domain.RolesAssignedEvent) error {
+	return nil
+}
+
+func (m *mockEventPublisher) PublishRolesRevoked(context.Context, domain.RolesRevokedEvent) error {
 	return nil
 }
 

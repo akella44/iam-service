@@ -4,38 +4,6 @@
         "contact": {}
     },
     "paths": {
-        "/.well-known/jwks.json": {
-            "get": {
-                "description": "Exposes the public keys used to verify IAM JWT signatures.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Public"
-                ],
-                "summary": "Retrieve JSON Web Key Set",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.JWKSResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/api/v1/auth/login": {
             "post": {
                 "description": "Validates the provided identifier and password, returning access and refresh tokens on success.",
@@ -1149,40 +1117,6 @@
                 },
                 "timestamp": {
                     "type": "string"
-                }
-            }
-        },
-        "handlers.JWKSKey": {
-            "type": "object",
-            "properties": {
-                "alg": {
-                    "type": "string"
-                },
-                "e": {
-                    "type": "string"
-                },
-                "kid": {
-                    "type": "string"
-                },
-                "kty": {
-                    "type": "string"
-                },
-                "n": {
-                    "type": "string"
-                },
-                "use": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.JWKSResponse": {
-            "type": "object",
-            "properties": {
-                "keys": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.JWKSKey"
-                    }
                 }
             }
         },

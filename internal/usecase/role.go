@@ -195,3 +195,241 @@ func (s *RoleService) CreateRole(ctx context.Context, actorID string, input Crea
 
 	return result, nil
 }
+
+// GetRole retrieves a role by ID.
+func (s *RoleService) GetRole(ctx context.Context, roleID string) (*domain.Role, error) {
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" {
+		return nil, fmt.Errorf("role id is required")
+	}
+
+	role, err := s.roles.GetByID(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("get role: %w", err)
+	}
+
+	return role, nil
+}
+
+// UpdateRoleInput captures the payload for updating a role.
+type UpdateRoleInput struct {
+	ID          string
+	Name        *string
+	Description *string
+}
+
+// UpdateRole modifies an existing role's name and/or description.
+func (s *RoleService) UpdateRole(ctx context.Context, actorID string, input UpdateRoleInput) (*domain.Role, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return nil, fmt.Errorf("actor id is required")
+	}
+
+	roleID := strings.TrimSpace(input.ID)
+	if roleID == "" {
+		return nil, fmt.Errorf("role id is required")
+	}
+
+	// Verify actor has permission
+	actorPermissions, err := s.permissions.ListByUser(ctx, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("list actor permissions: %w", err)
+	}
+
+	permSet := make(map[string]struct{}, len(actorPermissions))
+	for _, permission := range actorPermissions {
+		permSet[permission.Name] = struct{}{}
+	}
+
+	if _, ok := permSet[PermissionRoleCreate]; !ok {
+		return nil, ErrPermissionDenied
+	}
+
+	// Get existing role
+	role, err := s.roles.GetByID(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("get role: %w", err)
+	}
+
+	// Update fields if provided
+	if input.Name != nil {
+		trimmed := strings.TrimSpace(*input.Name)
+		if trimmed == "" {
+			return nil, fmt.Errorf("role name cannot be empty")
+		}
+		role.Name = trimmed
+	}
+
+	if input.Description != nil {
+		trimmed := strings.TrimSpace(*input.Description)
+		if trimmed == "" {
+			role.Description = nil
+		} else {
+			role.Description = &trimmed
+		}
+	}
+
+	if err := s.roles.Update(ctx, *role); err != nil {
+		return nil, fmt.Errorf("update role: %w", err)
+	}
+
+	return role, nil
+}
+
+// DeleteRole removes a role by ID.
+func (s *RoleService) DeleteRole(ctx context.Context, actorID, roleID string) error {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return fmt.Errorf("actor id is required")
+	}
+
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" {
+		return fmt.Errorf("role id is required")
+	}
+
+	// Verify actor has permission
+	actorPermissions, err := s.permissions.ListByUser(ctx, actorID)
+	if err != nil {
+		return fmt.Errorf("list actor permissions: %w", err)
+	}
+
+	permSet := make(map[string]struct{}, len(actorPermissions))
+	for _, permission := range actorPermissions {
+		permSet[permission.Name] = struct{}{}
+	}
+
+	if _, ok := permSet[PermissionRoleCreate]; !ok {
+		return ErrPermissionDenied
+	}
+
+	if err := s.roles.Delete(ctx, roleID); err != nil {
+		return fmt.Errorf("delete role: %w", err)
+	}
+
+	return nil
+}
+
+// AssignPermissionsInput captures the payload for assigning permissions to a role.
+type AssignPermissionsInput struct {
+	RoleID        string
+	PermissionIDs []string
+}
+
+// AssignPermissions links permissions to a role.
+func (s *RoleService) AssignPermissions(ctx context.Context, actorID string, input AssignPermissionsInput) (int, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return 0, fmt.Errorf("actor id is required")
+	}
+
+	roleID := strings.TrimSpace(input.RoleID)
+	if roleID == "" {
+		return 0, fmt.Errorf("role id is required")
+	}
+
+	// Verify actor has permission
+	actorPermissions, err := s.permissions.ListByUser(ctx, actorID)
+	if err != nil {
+		return 0, fmt.Errorf("list actor permissions: %w", err)
+	}
+
+	permSet := make(map[string]struct{}, len(actorPermissions))
+	for _, permission := range actorPermissions {
+		permSet[permission.Name] = struct{}{}
+	}
+
+	if _, ok := permSet[PermissionRoleAssign]; !ok {
+		return 0, ErrPermissionDenied
+	}
+
+	// Verify role exists
+	if _, err := s.roles.GetByID(ctx, roleID); err != nil {
+		return 0, fmt.Errorf("get role: %w", err)
+	}
+
+	// Filter to unique, non-empty permission IDs
+	uniquePermIDs := make([]string, 0, len(input.PermissionIDs))
+	seen := make(map[string]struct{}, len(input.PermissionIDs))
+
+	for _, permID := range input.PermissionIDs {
+		trimmed := strings.TrimSpace(permID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		uniquePermIDs = append(uniquePermIDs, trimmed)
+	}
+
+	count, err := s.roles.AssignPermissions(ctx, roleID, uniquePermIDs)
+	if err != nil {
+		return 0, fmt.Errorf("assign permissions: %w", err)
+	}
+
+	return count, nil
+}
+
+// RevokePermissionsInput captures the payload for revoking permissions from a role.
+type RevokePermissionsInput struct {
+	RoleID        string
+	PermissionIDs []string
+}
+
+// RevokePermissions removes permissions from a role.
+func (s *RoleService) RevokePermissions(ctx context.Context, actorID string, input RevokePermissionsInput) (int, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return 0, fmt.Errorf("actor id is required")
+	}
+
+	roleID := strings.TrimSpace(input.RoleID)
+	if roleID == "" {
+		return 0, fmt.Errorf("role id is required")
+	}
+
+	// Verify actor has permission
+	actorPermissions, err := s.permissions.ListByUser(ctx, actorID)
+	if err != nil {
+		return 0, fmt.Errorf("list actor permissions: %w", err)
+	}
+
+	permSet := make(map[string]struct{}, len(actorPermissions))
+	for _, permission := range actorPermissions {
+		permSet[permission.Name] = struct{}{}
+	}
+
+	if _, ok := permSet[PermissionRoleAssign]; !ok {
+		return 0, ErrPermissionDenied
+	}
+
+	// Verify role exists
+	if _, err := s.roles.GetByID(ctx, roleID); err != nil {
+		return 0, fmt.Errorf("get role: %w", err)
+	}
+
+	// Filter to unique, non-empty permission IDs
+	uniquePermIDs := make([]string, 0, len(input.PermissionIDs))
+	seen := make(map[string]struct{}, len(input.PermissionIDs))
+
+	for _, permID := range input.PermissionIDs {
+		trimmed := strings.TrimSpace(permID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		uniquePermIDs = append(uniquePermIDs, trimmed)
+	}
+
+	count, err := s.roles.RevokePermissions(ctx, roleID, uniquePermIDs)
+	if err != nil {
+		return 0, fmt.Errorf("revoke permissions: %w", err)
+	}
+
+	return count, nil
+}

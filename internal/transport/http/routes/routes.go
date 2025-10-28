@@ -58,11 +58,6 @@ func Register(deps Dependencies) *gin.Engine {
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(deps.Logger))
 
-	if deps.JWTManager != nil {
-		jwksHandler := handlers.NewJWKSHandler(deps.JWTManager)
-		r.GET("/.well-known/jwks.json", jwksHandler.Keys)
-	}
-
 	// Create auth middleware
 	authMiddleware := middleware.RequireAuth(deps.Services.Auth)
 
@@ -89,8 +84,6 @@ func Register(deps Dependencies) *gin.Engine {
 		notificationDispatcher := handlers.NewLoggingNotificationDispatcher(deps.Logger)
 
 		authGroup := api.Group("/auth")
-		tokenHandler := handlers.NewTokenHandler(deps.Services.Auth)
-		tokenHandler.RegisterRoutes(authGroup)
 
 		authHandler := handlers.NewAuthHandler(
 			deps.Services.Auth,
@@ -105,7 +98,7 @@ func Register(deps Dependencies) *gin.Engine {
 		userGroup := api.Group("/user")
 
 		registrationHandler := handlers.NewRegistrationHandler(deps.Services.Registration, notificationDispatcher, isDev)
-		userGroup.POST("/verify", registrationHandler.Verify)
+		registrationHandler.RegisterRoutes(userGroup)
 
 		passwordHandler := handlers.NewPasswordHandler(deps.Services.PasswordReset, notificationDispatcher, isDev)
 

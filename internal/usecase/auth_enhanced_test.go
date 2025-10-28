@@ -9,6 +9,7 @@ import (
 	uuid "github.com/google/uuid"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/config"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 )
@@ -65,6 +66,22 @@ func (r *loginUserRepository) TrimPasswordHistory(context.Context, string, int) 
 	return errors.New("unexpected call: TrimPasswordHistory")
 }
 
+func (r *loginUserRepository) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call: Update")
+}
+
+func (r *loginUserRepository) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call: SoftDelete")
+}
+
+func (r *loginUserRepository) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call: List")
+}
+
+func (r *loginUserRepository) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count")
+}
+
 //
 
 type loginRoleRepository struct {
@@ -74,11 +91,20 @@ type loginRoleRepository struct {
 func (r *loginRoleRepository) Create(context.Context, domain.Role) error {
 	return errors.New("unexpected call: CreateRole")
 }
+func (r *loginRoleRepository) GetByID(context.Context, string) (*domain.Role, error) {
+	return nil, errors.New("unexpected call: GetByID")
+}
 func (r *loginRoleRepository) List(context.Context) ([]domain.Role, error) {
 	return nil, errors.New("unexpected call: List")
 }
 func (r *loginRoleRepository) GetByName(context.Context, string) (*domain.Role, error) {
 	return nil, errors.New("unexpected call: GetByName")
+}
+func (r *loginRoleRepository) Update(context.Context, domain.Role) error {
+	return errors.New("unexpected call: Update")
+}
+func (r *loginRoleRepository) Delete(context.Context, string) error {
+	return errors.New("unexpected call: Delete")
 }
 func (r *loginRoleRepository) AssignPermissions(context.Context, string, []string) (int, error) {
 	return 0, errors.New("unexpected call: AssignPermissions")

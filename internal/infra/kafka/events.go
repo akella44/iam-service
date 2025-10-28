@@ -197,6 +197,36 @@ func (p *EventPublisher) PublishRolesAssigned(ctx context.Context, event domain.
 	return p.publish(ctx, event.EventID, "iam.user.roles.assigned", event.UserID, event.AssignedAt, payload)
 }
 
+// PublishRolesRevoked publishes iam.user.roles.revoked events.
+func (p *EventPublisher) PublishRolesRevoked(ctx context.Context, event domain.RolesRevokedEvent) error {
+	roles := make([]map[string]string, 0, len(event.RolesRemoved))
+	for _, assignment := range event.RolesRemoved {
+		role := map[string]string{
+			"role_id":   assignment.RoleID,
+			"role_name": assignment.RoleName,
+		}
+		roles = append(roles, role)
+	}
+
+	payload := struct {
+		UserID       string              `json:"user_id"`
+		RolesRemoved []map[string]string `json:"roles_removed"`
+		RevokedBy    string              `json:"revoked_by"`
+		RevokedAt    time.Time           `json:"revoked_at"`
+		Reason       string              `json:"reason,omitempty"`
+		Metadata     map[string]any      `json:"metadata,omitempty"`
+	}{
+		UserID:       event.UserID,
+		RolesRemoved: roles,
+		RevokedBy:    event.RevokedBy,
+		RevokedAt:    event.RevokedAt.UTC(),
+		Reason:       event.Reason,
+		Metadata:     event.Metadata,
+	}
+
+	return p.publish(ctx, event.EventID, "iam.user.roles.revoked", event.UserID, event.RevokedAt, payload)
+}
+
 // PublishSessionRevoked publishes iam.session.revoked events.
 func (p *EventPublisher) PublishSessionRevoked(ctx context.Context, event domain.SessionRevokedEvent) error {
 	payload := struct {

@@ -9,6 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/config"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
@@ -54,6 +55,18 @@ func (r *refreshUserRepository) AddPasswordHistory(context.Context, domain.UserP
 }
 func (r *refreshUserRepository) TrimPasswordHistory(context.Context, string, int) error {
 	return errors.New("unexpected call: TrimPasswordHistory")
+}
+func (r *refreshUserRepository) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call: Update")
+}
+func (r *refreshUserRepository) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call: SoftDelete")
+}
+func (r *refreshUserRepository) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call: List")
+}
+func (r *refreshUserRepository) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count")
 }
 
 //

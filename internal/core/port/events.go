@@ -12,5 +12,6 @@ type EventPublisher interface {
 	PublishPasswordChanged(ctx context.Context, event domain.PasswordChangedEvent) error
 	PublishPasswordResetRequested(ctx context.Context, event domain.PasswordResetRequestedEvent) error
 	PublishRolesAssigned(ctx context.Context, event domain.RolesAssignedEvent) error
+	PublishRolesRevoked(ctx context.Context, event domain.RolesRevokedEvent) error
 	PublishSessionRevoked(ctx context.Context, event domain.SessionRevokedEvent) error
 }

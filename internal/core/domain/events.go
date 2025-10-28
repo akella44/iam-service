@@ -56,6 +56,17 @@ type RolesAssignedEvent struct {
 	Metadata   map[string]any
 }
 
+// RolesRevokedEvent represents the payload for iam.user.roles.revoked messages.
+type RolesRevokedEvent struct {
+	EventID      string
+	UserID       string
+	RolesRemoved []RoleAssignment
+	RevokedBy    string
+	RevokedAt    time.Time
+	Reason       string
+	Metadata     map[string]any
+}
+
 // SessionRevokedEvent represents the payload for iam.session.revoked messages.
 type SessionRevokedEvent struct {
 	EventID       string

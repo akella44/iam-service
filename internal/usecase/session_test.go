@@ -162,6 +162,10 @@ func (f *fakeEventPublisher) PublishRolesAssigned(ctx context.Context, event dom
 	return nil
 }
 
+func (f *fakeEventPublisher) PublishRolesRevoked(ctx context.Context, event domain.RolesRevokedEvent) error {
+	return nil
+}
+
 func (f *fakeEventPublisher) PublishSessionRevoked(ctx context.Context, event domain.SessionRevokedEvent) error {
 	if f.fail != nil {
 		return f.fail

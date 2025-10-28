@@ -202,7 +202,9 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 		return domain.User{}, zero, fmt.Errorf("no contact method available")
 	}
 
-	s.publishUserRegistered(ctx, user, result.Delivery)
+	if err := s.publishUserRegistered(ctx, user, result.Delivery); err != nil {
+		return domain.User{}, zero, fmt.Errorf("publish register event: %w", err)
+	}
 
 	return user, result, nil
 }
@@ -235,9 +237,9 @@ func (s *RegistrationService) checkPasswordHistory(ctx context.Context, userID, 
 	return nil
 }
 
-func (s *RegistrationService) publishUserRegistered(ctx context.Context, user domain.User, delivery string) {
+func (s *RegistrationService) publishUserRegistered(ctx context.Context, user domain.User, delivery string) error {
 	if s.events == nil {
-		return
+		return nil
 	}
 
 	method := delivery
@@ -278,8 +280,10 @@ func (s *RegistrationService) publishUserRegistered(ctx context.Context, user do
 	}
 
 	if err := s.events.PublishUserRegistered(ctx, event); err != nil {
-		// TODO: add structured logging once logger dependency is available
+		return fmt.Errorf("%w: cannot publish message", err)
+		//TODO: make proper impl with logger
 	}
+	return nil
 }
 
 func (s *RegistrationService) storePasswordHistory(ctx context.Context, user domain.User) error {

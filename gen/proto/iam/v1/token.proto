@@ -22,6 +22,9 @@ service TokenService {
 
   // RevokeAllForUser revokes all tokens for the supplied user.
   rpc RevokeAllForUser(RevokeAllForUserRequest) returns (RevokeResponse);
+
+  // GetJWKS returns the JSON Web Key Set for offline JWT validation.
+  rpc GetJWKS(GetJWKSRequest) returns (GetJWKSResponse);
 }
 
 // ValidateTokenRequest contains the token to validate.
@@ -97,4 +100,12 @@ message RevokeResponse {
   bool success = 1;
   int32 revoked_count = 2;
   string error = 3;
+}
+
+// GetJWKSRequest is empty - no parameters needed.
+message GetJWKSRequest {}
+
+// GetJWKSResponse contains the JSON Web Key Set.
+message GetJWKSResponse {
+  string jwks_json = 1; // Raw JSON containing the JWKS
 }

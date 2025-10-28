@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/arklim/social-platform-iam/internal/core/port"
 	"github.com/arklim/social-platform-iam/internal/infra/config"
 	"github.com/arklim/social-platform-iam/internal/infra/database"
 	kafkainfra "github.com/arklim/social-platform-iam/internal/infra/kafka"
@@ -86,7 +87,22 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 
 	repos := postgresrepo.NewRepositories(pool)
 
-	eventPublisher := kafkainfra.NewStubPublisher(log)
+	// Initialize Kafka event publisher
+	var eventPublisher port.EventPublisher
+	if len(cfg.Kafka.Brokers) > 0 {
+		kafkaProducer, err := kafkainfra.NewProducer(cfg.Kafka, log)
+		if err != nil {
+			log.Warn("failed to init kafka producer, using stub publisher", zap.Error(err))
+			eventPublisher = kafkainfra.NewStubPublisher(log)
+		} else {
+			eventPublisher = kafkainfra.NewEventPublisher(kafkaProducer, cfg.App, log)
+			log.Info("kafka event publisher initialized", zap.Strings("brokers", cfg.Kafka.Brokers))
+		}
+	} else {
+		log.Info("kafka brokers not configured, using stub publisher")
+		eventPublisher = kafkainfra.NewStubPublisher(log)
+	}
+
 	passwordValidator := security.DefaultPasswordValidator()
 	passwordPolicy := security.NewPasswordPolicy()
 
@@ -112,7 +128,7 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 	authService.WithSessionService(sessionService)
 
 	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordPolicy, eventPublisher)
-	userService := usecase.NewUserService(repos.Users, repos.Permissions, passwordValidator)
+	userService := usecase.NewUserService(repos.Users, repos.Permissions, repos.Roles, eventPublisher, passwordValidator)
 	roleService := usecase.NewRoleService(repos.Roles, repos.Permissions, repos.Users)
 	passwordResetService := usecase.NewPasswordResetService(cfg, repos.Users, repos.Tokens, rateLimitStore, eventPublisher, sessionService, passwordValidator, passwordPolicy, log)
 	tokenService := usecase.NewTokenService(cfg, keyProvider, repos.Tokens, repos.Sessions, repos.Users, revocationStore, log)
@@ -120,7 +136,11 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 	grpcSrv, err := transportgrpc.NewServer(transportgrpc.ServerDependencies{
 		AuthService:  authService,
 		TokenService: tokenService,
+		JWTManager:   jwksManager,
 		Logger:       log,
+		PublicMethods: []string{
+			"/iam.v1.TokenService/GetJWKS",
+		},
 	})
 	if err != nil {
 		_ = redisClient.Close()
@@ -182,8 +202,18 @@ func (a *Application) Run(ctx context.Context) error {
 			zap.String("address", a.grpcAddr),
 		)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					a.logger.Error("gRPC server panicked", zap.Any("panic", r))
+					grpcErrCh <- fmt.Errorf("grpc server panicked: %v", r)
+				}
+			}()
+			a.logger.Info("gRPC server goroutine started, calling Serve()")
 			if err := a.grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				a.logger.Error("gRPC server error", zap.Error(err))
 				grpcErrCh <- fmt.Errorf("run grpc server: %w", err)
+			} else {
+				a.logger.Info("gRPC server stopped gracefully")
 			}
 		}()
 	}

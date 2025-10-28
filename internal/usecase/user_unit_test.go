@@ -76,6 +76,22 @@ func (m *userRepoMock) TrimPasswordHistory(context.Context, string, int) error {
 	return errors.New("unexpected call: TrimPasswordHistory")
 }
 
+func (m *userRepoMock) Update(context.Context, domain.User) error {
+	return errors.New("unexpected call: Update")
+}
+
+func (m *userRepoMock) SoftDelete(context.Context, string) error {
+	return errors.New("unexpected call: SoftDelete")
+}
+
+func (m *userRepoMock) List(context.Context, port.UserFilter) ([]domain.User, error) {
+	return nil, errors.New("unexpected call: List")
+}
+
+func (m *userRepoMock) Count(context.Context, port.UserFilter) (int, error) {
+	return 0, errors.New("unexpected call: Count")
+}
+
 type permissionRepoMock struct {
 	userPermissions map[string][]domain.Permission
 	listErr         error
@@ -131,7 +147,7 @@ func TestUserServiceChangePasswordSelfSuccess(t *testing.T) {
 	}
 
 	repo := &userRepoMock{user: domain.User{ID: "user-1", PasswordHash: currentHash}}
-	service := NewUserService(repo, nil, security.DefaultPasswordValidator())
+	service := NewUserService(repo, nil, nil, nil, security.DefaultPasswordValidator())
 
 	if err := service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Current-123",
@@ -171,7 +187,7 @@ func TestUserServiceChangePasswordOtherNoPermission(t *testing.T) {
 
 	repo := &userRepoMock{user: domain.User{ID: "user-2", PasswordHash: currentHash}}
 	perms := &permissionRepoMock{userPermissions: map[string][]domain.Permission{}}
-	service := NewUserService(repo, perms, security.DefaultPasswordValidator())
+	service := NewUserService(repo, perms, nil, nil, security.DefaultPasswordValidator())
 
 	err = service.ChangePassword(context.Background(), "admin", ChangePasswordInput{
 		TargetUserID:    "user-2",
@@ -197,7 +213,7 @@ func TestUserServiceChangePasswordOtherWithPermission(t *testing.T) {
 		"admin": {{Name: PermissionUserPasswordChangeAny}},
 	}}
 
-	service := NewUserService(repo, perms, security.DefaultPasswordValidator())
+	service := NewUserService(repo, perms, nil, nil, security.DefaultPasswordValidator())
 
 	if err := service.ChangePassword(context.Background(), "admin", ChangePasswordInput{
 		TargetUserID:    "user-2",
@@ -222,7 +238,7 @@ func TestUserServiceChangePasswordInvalidCurrent(t *testing.T) {
 	}
 
 	repo := &userRepoMock{user: domain.User{ID: "user-1", PasswordHash: hash}}
-	service := NewUserService(repo, nil, security.DefaultPasswordValidator())
+	service := NewUserService(repo, nil, nil, nil, security.DefaultPasswordValidator())
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Wrong123",
@@ -243,7 +259,7 @@ func TestUserServiceChangePasswordSamePassword(t *testing.T) {
 	}
 
 	repo := &userRepoMock{user: domain.User{ID: "user-1", PasswordHash: hash}}
-	service := NewUserService(repo, nil, security.DefaultPasswordValidator())
+	service := NewUserService(repo, nil, nil, nil, security.DefaultPasswordValidator())
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Samepass123",
@@ -264,7 +280,7 @@ func TestUserServiceChangePasswordSelfMissingCurrent(t *testing.T) {
 	}
 
 	repo := &userRepoMock{user: domain.User{ID: "user-1", PasswordHash: hash}}
-	service := NewUserService(repo, nil, security.DefaultPasswordValidator())
+	service := NewUserService(repo, nil, nil, nil, security.DefaultPasswordValidator())
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "",
@@ -285,7 +301,7 @@ func TestUserServiceChangePasswordPolicyViolation(t *testing.T) {
 	}
 
 	repo := &userRepoMock{user: domain.User{ID: "user-1", PasswordHash: hash}}
-	service := NewUserService(repo, nil, security.DefaultPasswordValidator())
+	service := NewUserService(repo, nil, nil, nil, security.DefaultPasswordValidator())
 
 	err = service.ChangePassword(context.Background(), "user-1", ChangePasswordInput{
 		CurrentPassword: "Validpass123",

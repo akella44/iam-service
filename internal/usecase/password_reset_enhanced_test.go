@@ -180,6 +180,10 @@ func (m *passwordResetEventPublisherMock) PublishRolesAssigned(_ context.Context
 	return nil
 }
 
+func (m *passwordResetEventPublisherMock) PublishRolesRevoked(_ context.Context, _ domain.RolesRevokedEvent) error {
+	return nil
+}
+
 func (m *passwordResetEventPublisherMock) PublishSessionRevoked(_ context.Context, event domain.SessionRevokedEvent) error {
 	m.sessionRevoked = append(m.sessionRevoked, event)
 	return nil

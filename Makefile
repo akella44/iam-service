@@ -44,4 +44,4 @@ db-setup-dev: db-init seed-dev
 	@echo "✅ Database initialized and seeded"
 
 swag:
-	swag init -g cmd/iam/main.go -o docs/swagger
+	swag init -g cmd/api/main.go -o docs/swagger

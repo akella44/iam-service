@@ -93,6 +93,20 @@ func (p *StubPublisher) PublishRolesAssigned(_ context.Context, event domain.Rol
 	return nil
 }
 
+// PublishRolesRevoked logs iam.user.roles.revoked events.
+func (p *StubPublisher) PublishRolesRevoked(_ context.Context, event domain.RolesRevokedEvent) error {
+	payload := map[string]any{
+		"user_id":       event.UserID,
+		"roles_removed": event.RolesRemoved,
+		"revoked_by":    event.RevokedBy,
+		"revoked_at":    event.RevokedAt,
+		"reason":        event.Reason,
+		"metadata":      event.Metadata,
+	}
+	p.logEvent("iam.user.roles.revoked", event.UserID, event.RevokedAt, payload)
+	return nil
+}
+
 // PublishSessionRevoked logs iam.session.revoked events.
 func (p *StubPublisher) PublishSessionRevoked(_ context.Context, event domain.SessionRevokedEvent) error {
 	payload := map[string]any{

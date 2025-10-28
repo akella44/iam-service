@@ -221,6 +221,182 @@ func (r *UserRepository) GetByIdentifier(ctx context.Context, identifier string)
 	return &user, nil
 }
 
+// Update modifies an existing user's fields.
+func (r *UserRepository) Update(ctx context.Context, user domain.User) error {
+	var emailValue any
+	if user.Email != "" {
+		emailValue = user.Email
+	}
+
+	var phoneValue any
+	if user.Phone != nil && *user.Phone != "" {
+		phoneValue = *user.Phone
+	}
+
+	stmt, args, err := r.builder.Update("iam.users").
+		Set("username", user.Username).
+		Set("email", emailValue).
+		Set("phone", phoneValue).
+		Set("status", user.Status).
+		Set("is_active", user.IsActive).
+		Where(squirrel.Eq{"id": user.ID}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("build update user sql: %w", err)
+	}
+
+	ct, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("update user: %w", err)
+	}
+
+	if ct.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
+// SoftDelete marks a user as inactive (soft delete).
+func (r *UserRepository) SoftDelete(ctx context.Context, id string) error {
+	stmt, args, err := r.builder.Update("iam.users").
+		Set("is_active", false).
+		Set("status", domain.UserStatusDisabled).
+		Where(squirrel.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("build soft delete user sql: %w", err)
+	}
+
+	ct, err := r.pool.Exec(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("soft delete user: %w", err)
+	}
+
+	if ct.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
+// List returns users with optional filtering and pagination.
+func (r *UserRepository) List(ctx context.Context, filter port.UserFilter) ([]domain.User, error) {
+	query := r.builder.Select(
+		"id",
+		"username",
+		"email",
+		"phone",
+		"password_hash",
+		"password_algo",
+		"status",
+		"is_active",
+		"registered_at",
+		"last_login",
+		"last_password_change",
+	).
+		From("iam.users").
+		OrderBy("registered_at DESC")
+
+	if filter.Status != "" {
+		query = query.Where(squirrel.Eq{"status": filter.Status})
+	}
+
+	if filter.IsActive != nil {
+		query = query.Where(squirrel.Eq{"is_active": *filter.IsActive})
+	}
+
+	if filter.Limit > 0 {
+		query = query.Limit(uint64(filter.Limit))
+	}
+
+	if filter.Offset > 0 {
+		query = query.Offset(uint64(filter.Offset))
+	}
+
+	stmt, args, err := query.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("build list users sql: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	users := make([]domain.User, 0)
+	for rows.Next() {
+		var (
+			user      domain.User
+			email     sql.NullString
+			phone     sql.NullString
+			lastLogin *time.Time
+		)
+
+		if err := rows.Scan(
+			&user.ID,
+			&user.Username,
+			&email,
+			&phone,
+			&user.PasswordHash,
+			&user.PasswordAlgo,
+			&user.Status,
+			&user.IsActive,
+			&user.RegisteredAt,
+			&lastLogin,
+			&user.LastPasswordChange,
+		); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+
+		user.LastLogin = lastLogin
+		if email.Valid {
+			user.Email = email.String
+		}
+		if phone.Valid {
+			val := phone.String
+			user.Phone = &val
+		}
+
+		users = append(users, user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+
+	return users, nil
+}
+
+// Count returns the total number of users matching the filter.
+func (r *UserRepository) Count(ctx context.Context, filter port.UserFilter) (int, error) {
+	query := r.builder.Select("COUNT(*)").
+		From("iam.users")
+
+	if filter.Status != "" {
+		query = query.Where(squirrel.Eq{"status": filter.Status})
+	}
+
+	if filter.IsActive != nil {
+		query = query.Where(squirrel.Eq{"is_active": *filter.IsActive})
+	}
+
+	stmt, args, err := query.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("build count users sql: %w", err)
+	}
+
+	row := r.pool.QueryRow(ctx, stmt, args...)
+
+	var count int64
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("scan users count: %w", err)
+	}
+
+	return int(count), nil
+}
+
 // UpdateStatus updates the status field for a user.
 func (r *UserRepository) UpdateStatus(ctx context.Context, id string, status domain.UserStatus) error {
 	stmt, args, err := r.builder.Update("iam.users").
