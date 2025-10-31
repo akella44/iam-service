@@ -26,13 +26,13 @@ func TestGRPCMetricsUnaryInterceptorRecordsMetrics(t *testing.T) {
 		return "ok", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/ValidateToken"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/GetJWKS"}
 
 	if _, err := interceptor(context.Background(), struct{}{}, info, handler); err != nil {
 		t.Fatalf("unexpected handler error: %v", err)
 	}
 
-	labels := prometheus.Labels{"service": "iam.v1.TokenService", "method": "ValidateToken", "code": codes.OK.String()}
+	labels := prometheus.Labels{"service": "iam.v1.TokenService", "method": "GetJWKS", "code": codes.OK.String()}
 
 	if got := testutil.ToFloat64(metrics.requests.With(labels)); got != 1 {
 		t.Fatalf("expected request counter 1, got %f", got)

@@ -292,6 +292,10 @@ func (r *testTokenRepo) CleanupExpiredJTIs(context.Context, time.Time) (int, err
 	return 0, errors.New("unexpected call")
 }
 
+func (r *testTokenRepo) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
+	return nil
+}
+
 func TestAuthService_IssueRefreshToken(t *testing.T) {
 	keyProvider, keyDir := createTestKeyProvider(t)
 
@@ -503,7 +507,7 @@ func TestAuthService_ParseAccessToken_Success(t *testing.T) {
 		t.Fatalf("expected email claim to be absent")
 	}
 
-	claims, err := service.ParseAccessToken(token)
+	claims, err := service.ParseAccessToken(context.Background(), token)
 	if err != nil {
 		t.Fatalf("ParseAccessToken returned error: %v", err)
 	}
@@ -548,11 +552,11 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("NewAuthService failed: %v", err)
 	}
 
-	if _, err := service.ParseAccessToken(" "); err == nil {
+	if _, err := service.ParseAccessToken(context.Background(), " "); err == nil {
 		t.Fatalf("expected error for empty token")
 	}
 
-	if _, err := service.ParseAccessToken("not-a-jwt"); !errors.Is(err, ErrInvalidAccessToken) {
+	if _, err := service.ParseAccessToken(context.Background(), "not-a-jwt"); !errors.Is(err, ErrInvalidAccessToken) {
 		t.Fatalf("expected ErrInvalidAccessToken, got %v", err)
 	}
 
@@ -582,7 +586,7 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("failed to sign expired token: %v", err)
 	}
 
-	if _, err := service.ParseAccessToken(expiredToken); !errors.Is(err, ErrExpiredAccessToken) {
+	if _, err := service.ParseAccessToken(context.Background(), expiredToken); !errors.Is(err, ErrExpiredAccessToken) {
 		t.Fatalf("expected ErrExpiredAccessToken, got %v", err)
 	}
 
@@ -624,7 +628,145 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 		t.Fatalf("failed to sign foreign token: %v", err)
 	}
 
-	if _, err := service.ParseAccessToken(foreignToken); !errors.Is(err, ErrInvalidAccessToken) {
+	if _, err := service.ParseAccessToken(context.Background(), foreignToken); !errors.Is(err, ErrInvalidAccessToken) {
 		t.Fatalf("expected ErrInvalidAccessToken for foreign token, got %v", err)
+	}
+}
+
+func TestAuthService_ParseAccessToken_RejectsStaleSessionVersion(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+
+	cfg := &config.AppConfig{
+		App: config.AppSettings{Name: "test-app", Env: "development"},
+		JWT: config.JWTSettings{KeyDirectory: keyDir},
+	}
+
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("NewTokenGenerator failed: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	userID := "user-123"
+	now := time.Now().UTC()
+	sessionRepo := newFakeSessionRepository(domain.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		Version:   2,
+		ExpiresAt: now.Add(time.Hour),
+	})
+
+	service, err := NewAuthService(cfg, nil, nil, nil, sessionRepo, nil, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService failed: %v", err)
+	}
+
+	cache := &stubSessionVersionCache{values: map[string]int64{sessionID: 2}}
+	service.WithSessionVersionCache(cache, time.Minute)
+
+	claims := security.AccessTokenClaims{
+		Roles:          []string{"user"},
+		UserID:         userID,
+		SessionID:      sessionID,
+		SessionVersion: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   security.HashToken(userID + ":" + cfg.App.Name),
+			Issuer:    cfg.App.Name,
+			Audience:  jwt.ClaimStrings{cfg.App.Name},
+			IssuedAt:  jwt.NewNumericDate(now.Add(-time.Minute)),
+			NotBefore: jwt.NewNumericDate(now.Add(-time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			ID:        uuid.NewString(),
+		},
+	}
+
+	signingKey, err := keyProvider.GetSigningKey()
+	if err != nil {
+		t.Fatalf("failed to get signing key: %v", err)
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "private"
+	signed, err := token.SignedString(signingKey)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	if _, err := service.ParseAccessToken(context.Background(), signed); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("expected ErrInvalidAccessToken for stale session version, got %v", err)
+	}
+}
+
+func TestAuthService_ParseAccessToken_RejectsRevokedSession(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+
+	cfg := &config.AppConfig{
+		App: config.AppSettings{Name: "test-app", Env: "development"},
+		JWT: config.JWTSettings{KeyDirectory: keyDir},
+	}
+
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("NewTokenGenerator failed: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	userID := "user-456"
+	now := time.Now().UTC()
+	revokedAt := now.Add(-5 * time.Minute)
+	sessionRepo := newFakeSessionRepository(domain.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		Version:   3,
+		ExpiresAt: now.Add(time.Hour),
+		RevokedAt: &revokedAt,
+		RevokeReason: func() *string {
+			reason := "user_action"
+			return &reason
+		}(),
+	})
+
+	service, err := NewAuthService(cfg, nil, nil, nil, sessionRepo, nil, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService failed: %v", err)
+	}
+
+	cache := &stubSessionVersionCache{}
+	service.WithSessionVersionCache(cache, time.Minute)
+
+	claims := security.AccessTokenClaims{
+		UserID:         userID,
+		SessionID:      sessionID,
+		SessionVersion: 3,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   security.HashToken(userID + ":" + cfg.App.Name),
+			Issuer:    cfg.App.Name,
+			Audience:  jwt.ClaimStrings{cfg.App.Name},
+			IssuedAt:  jwt.NewNumericDate(now.Add(-time.Minute)),
+			NotBefore: jwt.NewNumericDate(now.Add(-time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			ID:        uuid.NewString(),
+		},
+	}
+
+	signingKey, err := keyProvider.GetSigningKey()
+	if err != nil {
+		t.Fatalf("failed to get signing key: %v", err)
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "private"
+	signed, err := token.SignedString(signingKey)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	if _, err := service.ParseAccessToken(context.Background(), signed); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("expected ErrInvalidAccessToken for revoked session, got %v", err)
+	}
+
+	// ensure the revocation path cached the terminal version for future lookups
+	if version, cacheErr := cache.GetSessionVersion(context.Background(), sessionID); cacheErr != nil || version != 3 {
+		t.Fatalf("expected cached session version 3, got version=%d err=%v", version, cacheErr)
 	}
 }

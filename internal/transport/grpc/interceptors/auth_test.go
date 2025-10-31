@@ -20,7 +20,7 @@ type stubTokenParser struct {
 	err    error
 }
 
-func (s *stubTokenParser) ParseAccessToken(string) (*security.AccessTokenClaims, error) {
+func (s *stubTokenParser) ParseAccessToken(context.Context, string) (*security.AccessTokenClaims, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -41,7 +41,7 @@ func TestAuthInterceptorAllowsValidTokens(t *testing.T) {
 	}
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token-value"))
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/ValidateToken"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.PrivateService/Action"}
 
 	if _, err := interceptor(ctx, struct{}{}, info, handler); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -52,7 +52,7 @@ func TestAuthInterceptorRejectsMissingToken(t *testing.T) {
 	parser := &stubTokenParser{}
 	interceptor := NewAuthInterceptor(parser, AuthOptions{}).UnaryServerInterceptor()
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/ValidateToken"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.PrivateService/Action"}
 	if _, err := interceptor(context.Background(), struct{}{}, info, func(ctx context.Context, req interface{}) (interface{}, error) {
 		t.Fatalf("handler should not be invoked")
 		return nil, nil
@@ -63,9 +63,9 @@ func TestAuthInterceptorRejectsMissingToken(t *testing.T) {
 
 func TestAuthInterceptorPassesThroughAllowedMethods(t *testing.T) {
 	parser := &stubTokenParser{err: errors.New("should not be called")}
-	interceptor := NewAuthInterceptor(parser, AuthOptions{AllowMethods: []string{"/iam.v1.PublicService/Ping"}}).UnaryServerInterceptor()
+	interceptor := NewAuthInterceptor(parser, AuthOptions{AllowMethods: []string{"/iam.v1.TokenService/GetJWKS"}}).UnaryServerInterceptor()
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.PublicService/Ping"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/GetJWKS"}
 	if _, err := interceptor(context.Background(), struct{}{}, info, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return "pong", nil
 	}); err != nil {
@@ -77,7 +77,7 @@ func TestAuthInterceptorMapsExpiredTokens(t *testing.T) {
 	parser := &stubTokenParser{err: usecase.ErrExpiredAccessToken}
 	interceptor := NewAuthInterceptor(parser, AuthOptions{}).UnaryServerInterceptor()
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/ValidateToken"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.PrivateService/Action"}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
 	if _, err := interceptor(ctx, struct{}{}, info, func(ctx context.Context, req interface{}) (interface{}, error) {
 		t.Fatalf("handler should not be invoked")

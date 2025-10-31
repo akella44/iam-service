@@ -361,12 +361,21 @@ func (r *TokenRepository) CreateRefreshToken(ctx context.Context, token domain.R
 		familyValue = familyID
 	}
 
+	issuedVersion := token.IssuedVersion
+	if issuedVersion < 0 {
+		issuedVersion = 0
+	}
+	if token.SessionID != nil && issuedVersion <= 0 {
+		issuedVersion = 1
+	}
+
 	sql, args, err := r.builder.Insert("iam.refresh_tokens").
 		Columns(
 			"id",
 			"user_id",
 			"session_id",
 			"family_id",
+			"issued_version",
 			"token_hash",
 			"client_id",
 			"ip",
@@ -382,6 +391,7 @@ func (r *TokenRepository) CreateRefreshToken(ctx context.Context, token domain.R
 			token.UserID,
 			optionalString(token.SessionID),
 			familyValue,
+			issuedVersion,
 			token.TokenHash,
 			optionalString(token.ClientID),
 			optionalString(token.IP),
@@ -411,6 +421,7 @@ func (r *TokenRepository) GetRefreshTokenByHash(ctx context.Context, hash string
 		"user_id",
 		"session_id",
 		"family_id",
+		"issued_version",
 		"token_hash",
 		"client_id",
 		"ip",
@@ -432,14 +443,15 @@ func (r *TokenRepository) GetRefreshTokenByHash(ctx context.Context, hash string
 	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var (
-		token     domain.RefreshToken
-		sessionID sql.NullString
-		clientID  sql.NullString
-		ip        sql.NullString
-		userAgent sql.NullString
-		usedAt    sql.NullTime
-		revokedAt sql.NullTime
-		metadata  []byte
+		token         domain.RefreshToken
+		sessionID     sql.NullString
+		clientID      sql.NullString
+		ip            sql.NullString
+		userAgent     sql.NullString
+		usedAt        sql.NullTime
+		revokedAt     sql.NullTime
+		metadata      []byte
+		issuedVersion sql.NullInt64
 	)
 
 	if err := row.Scan(
@@ -447,6 +459,7 @@ func (r *TokenRepository) GetRefreshTokenByHash(ctx context.Context, hash string
 		&token.UserID,
 		&sessionID,
 		&token.FamilyID,
+		&issuedVersion,
 		&token.TokenHash,
 		&clientID,
 		&ip,
@@ -469,6 +482,9 @@ func (r *TokenRepository) GetRefreshTokenByHash(ctx context.Context, hash string
 	token.UserAgent = nullableStringPtr(userAgent)
 	token.UsedAt = nullableTimePtr(usedAt)
 	token.RevokedAt = nullableTimePtr(revokedAt)
+	if issuedVersion.Valid {
+		token.IssuedVersion = issuedVersion.Int64
+	}
 	if len(metadata) > 0 {
 		meta, err := unmarshalMetadata(metadata)
 		if err != nil {
@@ -493,6 +509,31 @@ func (r *TokenRepository) RevokeRefreshToken(ctx context.Context, refreshTokenID
 	ct, err := r.exec.Exec(ctx, sql, args...)
 	if err != nil {
 		return fmt.Errorf("revoke refresh token: %w", err)
+	}
+
+	if ct.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
+// UpdateRefreshTokenIssuedVersion overwrites the stored issued_version for a refresh token record.
+func (r *TokenRepository) UpdateRefreshTokenIssuedVersion(ctx context.Context, refreshTokenID string, version int64) error {
+	if version <= 0 {
+		return fmt.Errorf("version must be positive")
+	}
+	sql, args, err := r.builder.Update("iam.refresh_tokens").
+		Set("issued_version", version).
+		Where(squirrel.Eq{"id": refreshTokenID}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("build update refresh token version sql: %w", err)
+	}
+
+	ct, err := r.exec.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("update refresh token issued version: %w", err)
 	}
 
 	if ct.RowsAffected() == 0 {

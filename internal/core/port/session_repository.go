@@ -17,4 +17,7 @@ type SessionRepository interface {
 	RevokeAllForUser(ctx context.Context, userID string, reason string) (int, error)
 	StoreEvent(ctx context.Context, event domain.SessionEvent) error
 	RevokeSessionAccessTokens(ctx context.Context, sessionID string, reason string) (int, error)
+	GetVersion(ctx context.Context, sessionID string) (int64, error)
+	IncrementVersion(ctx context.Context, sessionID string, reason string) (int64, error)
+	SetVersion(ctx context.Context, sessionID string, version int64) error
 }

@@ -236,6 +236,10 @@ func (m *passwordResetTokenRepoMock) CleanupExpiredJTIs(context.Context, time.Ti
 	return 0, errors.New("unexpected call: CleanupExpiredJTIs")
 }
 
+func (m *passwordResetTokenRepoMock) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
+	return nil
+}
+
 func TestPasswordResetServiceInitiateEmail(t *testing.T) {
 	user := domain.User{ID: "user-1", Email: "person@example.com"}
 	userRepo := &passwordResetUserRepoMock{

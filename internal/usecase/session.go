@@ -26,11 +26,13 @@ var (
 
 // SessionService coordinates session listing and revocation workflows.
 type SessionService struct {
-	sessions port.SessionRepository
-	tokens   port.TokenRepository
-	events   port.EventPublisher
-	logger   *zap.Logger
-	now      func() time.Time
+	sessions     port.SessionRepository
+	tokens       port.TokenRepository
+	events       port.EventPublisher
+	logger       *zap.Logger
+	versionCache port.SessionVersionCache
+	versionTTL   time.Duration
+	now          func() time.Time
 }
 
 // NewSessionService constructs a SessionService.
@@ -55,6 +57,20 @@ func (s *SessionService) WithClock(clock func() time.Time) {
 	}
 }
 
+// WithSessionVersionCache injects a cache helper for propagating session version changes.
+func (s *SessionService) WithSessionVersionCache(cache port.SessionVersionCache, ttl time.Duration) *SessionService {
+	if cache != nil {
+		s.versionCache = cache
+		if ttl > 0 {
+			s.versionTTL = ttl
+		}
+		if s.versionTTL <= 0 {
+			s.versionTTL = 10 * time.Minute
+		}
+	}
+	return s
+}
+
 // ListSessions returns sessions owned by the supplied user. When activeOnly is true, revoked and expired sessions are filtered out.
 func (s *SessionService) ListSessions(ctx context.Context, userID string, activeOnly bool) ([]domain.Session, error) {
 	if strings.TrimSpace(userID) == "" {
@@ -70,6 +86,10 @@ func (s *SessionService) ListSessions(ctx context.Context, userID string, active
 			return nil, ErrSessionNotFound
 		}
 		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	for i := range sessions {
+		s.resolveSessionVersion(ctx, &sessions[i])
 	}
 
 	if !activeOnly {
@@ -105,6 +125,8 @@ func (s *SessionService) GetSession(ctx context.Context, userID, sessionID strin
 	if userID != "" && !strings.EqualFold(session.UserID, userID) {
 		return nil, ErrSessionForbidden
 	}
+
+	s.resolveSessionVersion(ctx, session)
 
 	return session, nil
 }
@@ -223,6 +245,8 @@ func (s *SessionService) fetchSession(ctx context.Context, sessionID string) (*d
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
+	s.resolveSessionVersion(ctx, session)
+
 	return session, nil
 }
 
@@ -251,6 +275,16 @@ func (s *SessionService) revoke(ctx context.Context, session *domain.Session, re
 	if err != nil {
 		s.logger.Warn("reload session after revoke failed", zap.String("session_id", session.ID), zap.Error(err))
 		updated = session
+	}
+
+	updatedVersion := updated.Version
+	if version, bumpErr := s.bumpSessionVersion(ctx, session.ID, reason); bumpErr != nil {
+		s.logger.Warn("bump session version failed", zap.String("session_id", session.ID), zap.Error(bumpErr))
+	} else if version > 0 {
+		updatedVersion = version
+	}
+	if updatedVersion > 0 {
+		updated.Version = updatedVersion
 	}
 
 	tokensRevoked := 0
@@ -297,6 +331,9 @@ func (s *SessionService) recordRevocation(ctx context.Context, session *domain.S
 	if session.DeviceLabel != nil && strings.TrimSpace(*session.DeviceLabel) != "" {
 		details["device_label"] = strings.TrimSpace(*session.DeviceLabel)
 	}
+	if session.Version > 0 {
+		details["session_version"] = session.Version
+	}
 
 	event := domain.SessionEvent{
 		ID:        uuid.NewString(),
@@ -323,6 +360,9 @@ func (s *SessionService) recordRevocation(ctx context.Context, session *domain.S
 		if tokensRevoked > 0 {
 			metadata["tokens_revoked"] = tokensRevoked
 		}
+		if session.Version > 0 {
+			metadata["session_version"] = session.Version
+		}
 		if len(metadata) == 0 {
 			metadata = nil
 		}
@@ -344,6 +384,60 @@ func (s *SessionService) recordRevocation(ctx context.Context, session *domain.S
 	}
 
 	return nil
+}
+
+func (s *SessionService) cacheSessionVersion(ctx context.Context, sessionID string, version int64) {
+	if s.versionCache == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || version <= 0 {
+		return
+	}
+	ttl := s.versionTTL
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+		s.versionTTL = ttl
+	}
+	if err := s.versionCache.SetSessionVersion(ctx, sessionID, version, ttl); err != nil {
+		s.logger.Warn("cache session version failed", zap.String("session_id", sessionID), zap.Error(err))
+	}
+}
+
+func (s *SessionService) resolveSessionVersion(ctx context.Context, session *domain.Session) {
+	if session == nil {
+		return
+	}
+	if s.versionCache != nil {
+		if cached, err := s.versionCache.GetSessionVersion(ctx, session.ID); err == nil && cached > 0 && cached > session.Version {
+			session.Version = cached
+		}
+	}
+	if session.Version <= 0 && s.sessions != nil {
+		if version, err := s.sessions.GetVersion(ctx, session.ID); err == nil && version > 0 {
+			session.Version = version
+		}
+	}
+}
+
+func (s *SessionService) bumpSessionVersion(ctx context.Context, sessionID, reason string) (int64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, fmt.Errorf("session id is required")
+	}
+	if s.sessions == nil {
+		return 0, fmt.Errorf("session repository not configured")
+	}
+	normalized := strings.TrimSpace(reason)
+	if normalized == "" {
+		normalized = "session_version_bump"
+	}
+	version, err := s.sessions.IncrementVersion(ctx, sessionID, normalized)
+	if err != nil {
+		return 0, err
+	}
+	s.cacheSessionVersion(ctx, sessionID, version)
+	return version, nil
 }
 
 func normalizeRevocationReason(reason string) string {

@@ -20,6 +20,7 @@ func TestSessionService_RevokeSession(t *testing.T) {
 		ID:          "session-1",
 		UserID:      "user-1",
 		FamilyID:    "family-1",
+		Version:     1,
 		DeviceID:    &deviceID,
 		DeviceLabel: &deviceLabel,
 		IPLast:      &ip,
@@ -36,6 +37,8 @@ func TestSessionService_RevokeSession(t *testing.T) {
 	publisher := &fakeEventPublisher{}
 	svc := NewSessionService(repo, nil, publisher, nil)
 	svc.WithClock(func() time.Time { return fixedNow })
+	cache := &stubSessionVersionCache{}
+	svc.WithSessionVersionCache(cache, time.Minute)
 
 	updated, tokensRevoked, err := svc.RevokeSession(context.Background(), "user-1", "session-1", "User Requested", "user-1")
 	if err != nil {
@@ -51,8 +54,20 @@ func TestSessionService_RevokeSession(t *testing.T) {
 	if !updated.RevokedAt.Equal(fixedNow) {
 		t.Fatalf("expected revoked timestamp %s, got %s", fixedNow, updated.RevokedAt)
 	}
+	if updated.Version != 2 {
+		t.Fatalf("expected session version 2, got %d", updated.Version)
+	}
 	if tokensRevoked != 2 {
 		t.Fatalf("expected 2 tokens revoked, got %d", tokensRevoked)
+	}
+	if len(repo.versionCalls) != 1 {
+		t.Fatalf("expected 1 version bump, got %d", len(repo.versionCalls))
+	}
+	if repo.versionCalls[0].sessionID != "session-1" || repo.versionCalls[0].reason != "user_requested" {
+		t.Fatalf("unexpected version bump payload: %+v", repo.versionCalls[0])
+	}
+	if len(cache.setCalls) != 1 || cache.setCalls[0].version != 2 {
+		t.Fatalf("expected cache to store version 2, got %+v", cache.setCalls)
 	}
 
 	if len(repo.storeEventCalls) != 1 {
@@ -70,6 +85,10 @@ func TestSessionService_RevokeSession(t *testing.T) {
 	if !ok || tokensDetail != 2 {
 		t.Fatalf("expected tokens_revoked detail, got %v", stored.Details["tokens_revoked"])
 	}
+	versionDetail, ok := stored.Details["session_version"].(int64)
+	if !ok || versionDetail != 2 {
+		t.Fatalf("expected session_version detail 2, got %v", stored.Details["session_version"])
+	}
 
 	if len(publisher.sessionRevoked) != 1 {
 		t.Fatalf("expected 1 published event, got %d", len(publisher.sessionRevoked))
@@ -80,6 +99,13 @@ func TestSessionService_RevokeSession(t *testing.T) {
 	}
 	if published.Reason != "user_requested" {
 		t.Fatalf("expected event reason user_requested, got %s", published.Reason)
+	}
+	if published.Metadata == nil {
+		t.Fatalf("expected metadata to include session_version entry, got nil")
+	}
+	versionMeta, ok := published.Metadata["session_version"].(int64)
+	if !ok || versionMeta != 2 {
+		t.Fatalf("expected metadata session_version 2, got %+v", published.Metadata["session_version"])
 	}
 }
 
@@ -129,6 +155,8 @@ func TestSessionService_RevokeAllSessions(t *testing.T) {
 	publisher := &fakeEventPublisher{}
 	svc := NewSessionService(repo, nil, publisher, nil)
 	svc.WithClock(func() time.Time { return fixedNow })
+	cache := &stubSessionVersionCache{}
+	svc.WithSessionVersionCache(cache, time.Minute)
 
 	revokedCount, tokensRevoked, err := svc.RevokeAllSessions(context.Background(), "user-1", "Suspicious Activity", "admin-1")
 	if err != nil {
@@ -145,6 +173,12 @@ func TestSessionService_RevokeAllSessions(t *testing.T) {
 	}
 	if len(publisher.sessionRevoked) != 2 {
 		t.Fatalf("expected 2 published events, got %d", len(publisher.sessionRevoked))
+	}
+	if len(repo.versionCalls) != 2 {
+		t.Fatalf("expected version bump per revoked session, got %d", len(repo.versionCalls))
+	}
+	if len(cache.setCalls) != 2 {
+		t.Fatalf("expected cache writes per revoked session, got %d", len(cache.setCalls))
 	}
 }
 
@@ -165,6 +199,8 @@ func TestSessionService_RevokeAllExceptCurrent(t *testing.T) {
 	publisher := &fakeEventPublisher{}
 	svc := NewSessionService(repo, nil, publisher, nil)
 	svc.WithClock(func() time.Time { return fixedNow })
+	cache := &stubSessionVersionCache{}
+	svc.WithSessionVersionCache(cache, time.Minute)
 
 	revokedCount, tokensRevoked, err := svc.RevokeAllExceptCurrent(context.Background(), "user-1", "session-current", "Admin action", "admin-1")
 	if err != nil {
@@ -175,6 +211,12 @@ func TestSessionService_RevokeAllExceptCurrent(t *testing.T) {
 	}
 	if tokensRevoked != 3 {
 		t.Fatalf("expected 3 tokens revoked, got %d", tokensRevoked)
+	}
+	if len(repo.versionCalls) != 2 {
+		t.Fatalf("expected 2 version bumps, got %d", len(repo.versionCalls))
+	}
+	if len(cache.setCalls) != 2 {
+		t.Fatalf("expected 2 cache writes, got %d", len(cache.setCalls))
 	}
 
 	repoMissing := newFakeSessionRepository(sessions...)

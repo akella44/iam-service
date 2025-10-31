@@ -58,11 +58,16 @@ func (r *SessionRepository) WithTx(tx pgx.Tx) *SessionRepository {
 
 // Create persists a new session aggregate.
 func (r *SessionRepository) Create(ctx context.Context, session domain.Session) error {
+	version := session.Version
+	if version <= 0 {
+		version = 1
+	}
 	sqlStmt, args, err := r.builder.Insert("iam.sessions").
 		Columns(
 			"id",
 			"user_id",
 			"family_id",
+			"session_version",
 			"refresh_token_id",
 			"device_id",
 			"device_label",
@@ -79,6 +84,7 @@ func (r *SessionRepository) Create(ctx context.Context, session domain.Session) 
 			session.ID,
 			session.UserID,
 			session.FamilyID,
+			version,
 			optionalString(session.RefreshTokenID),
 			optionalString(session.DeviceID),
 			optionalString(session.DeviceLabel),
@@ -107,23 +113,26 @@ func (r *SessionRepository) Create(ctx context.Context, session domain.Session) 
 func (r *SessionRepository) Get(ctx context.Context, sessionID string) (*domain.Session, error) {
 	stmt, args, err := r.builder.
 		Select(
-			"id",
-			"user_id",
-			"family_id",
-			"refresh_token_id",
-			"device_id",
-			"device_label",
-			"ip_first",
-			"ip_last",
-			"user_agent",
-			"created_at",
-			"last_seen",
-			"expires_at",
-			"revoked_at",
-			"revoke_reason",
+			"s.id",
+			"s.user_id",
+			"s.family_id",
+			"s.session_version",
+			"s.refresh_token_id",
+			"s.device_id",
+			"s.device_label",
+			"s.ip_first",
+			"s.ip_last",
+			"s.user_agent",
+			"s.created_at",
+			"s.last_seen",
+			"s.expires_at",
+			"s.revoked_at",
+			"s.revoke_reason",
+			"rt.issued_version",
 		).
-		From("iam.sessions").
-		Where(squirrel.Eq{"id": sessionID}).
+		From("iam.sessions AS s").
+		LeftJoin("iam.refresh_tokens AS rt ON rt.id = s.refresh_token_id").
+		Where(squirrel.Eq{"s.id": sessionID}).
 		Limit(1).
 		ToSql()
 	if err != nil {
@@ -146,24 +155,27 @@ func (r *SessionRepository) Get(ctx context.Context, sessionID string) (*domain.
 func (r *SessionRepository) ListByUser(ctx context.Context, userID string) ([]domain.Session, error) {
 	stmt, args, err := r.builder.
 		Select(
-			"id",
-			"user_id",
-			"family_id",
-			"refresh_token_id",
-			"device_id",
-			"device_label",
-			"ip_first",
-			"ip_last",
-			"user_agent",
-			"created_at",
-			"last_seen",
-			"expires_at",
-			"revoked_at",
-			"revoke_reason",
+			"s.id",
+			"s.user_id",
+			"s.family_id",
+			"s.session_version",
+			"s.refresh_token_id",
+			"s.device_id",
+			"s.device_label",
+			"s.ip_first",
+			"s.ip_last",
+			"s.user_agent",
+			"s.created_at",
+			"s.last_seen",
+			"s.expires_at",
+			"s.revoked_at",
+			"s.revoke_reason",
+			"rt.issued_version",
 		).
-		From("iam.sessions").
-		Where(squirrel.Eq{"user_id": userID}).
-		OrderBy("last_seen DESC").
+		From("iam.sessions AS s").
+		LeftJoin("iam.refresh_tokens AS rt ON rt.id = s.refresh_token_id").
+		Where(squirrel.Eq{"s.user_id": userID}).
+		OrderBy("s.last_seen DESC").
 		ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("build list sessions sql: %w", err)
@@ -324,6 +336,46 @@ func (r *SessionRepository) RevokeSessionAccessTokens(ctx context.Context, sessi
 	return count, nil
 }
 
+// GetVersion returns the authoritative session_version from PostgreSQL.
+func (r *SessionRepository) GetVersion(ctx context.Context, sessionID string) (int64, error) {
+	var version int64
+	if err := r.exec.QueryRow(ctx, "SELECT session_version FROM iam.sessions WHERE id = $1", sessionID).Scan(&version); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+			return 0, repository.ErrNotFound
+		}
+		return 0, fmt.Errorf("get session version: %w", err)
+	}
+	return version, nil
+}
+
+// IncrementVersion bumps the counter atomically via the session_bump_version helper.
+func (r *SessionRepository) IncrementVersion(ctx context.Context, sessionID string, reason string) (int64, error) {
+	normalized := normalizeReason(reason, "session_version_bump")
+	var version int64
+	if err := r.exec.QueryRow(ctx, "SELECT iam.session_bump_version($1, $2)", sessionID, normalized).Scan(&version); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+			return 0, repository.ErrNotFound
+		}
+		return 0, fmt.Errorf("increment session version: %w", err)
+	}
+	return version, nil
+}
+
+// SetVersion forcefully overwrites the session version counter.
+func (r *SessionRepository) SetVersion(ctx context.Context, sessionID string, version int64) error {
+	if version <= 0 {
+		return fmt.Errorf("version must be positive")
+	}
+	tag, err := r.exec.Exec(ctx, "UPDATE iam.sessions SET session_version = $2 WHERE id = $1", sessionID, version)
+	if err != nil {
+		return fmt.Errorf("set session version: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func scanSession(row pgx.Row) (*domain.Session, error) {
 	var (
 		session        domain.Session
@@ -335,12 +387,14 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 		userAgent      sql.NullString
 		revokedAt      sql.NullTime
 		revokeReason   sql.NullString
+		issuedVersion  sql.NullInt64
 	)
 
 	if err := row.Scan(
 		&session.ID,
 		&session.UserID,
 		&session.FamilyID,
+		&session.Version,
 		&refreshTokenID,
 		&deviceID,
 		&deviceLabel,
@@ -352,6 +406,7 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 		&session.ExpiresAt,
 		&revokedAt,
 		&revokeReason,
+		&issuedVersion,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrNotFound
@@ -367,6 +422,7 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 	session.UserAgent = nullableStringPtr(userAgent)
 	session.RevokedAt = nullableTimePtr(revokedAt)
 	session.RevokeReason = nullableStringPtr(revokeReason)
+	session.IssuedVersion = nullableInt64Ptr(issuedVersion)
 
 	return &session, nil
 }
@@ -418,6 +474,14 @@ func nullableTimePtr(value sql.NullTime) *time.Time {
 	}
 	t := value.Time.UTC()
 	return &t
+}
+
+func nullableInt64Ptr(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	v := value.Int64
+	return &v
 }
 
 func normalizeReason(candidate string, fallback string) string {

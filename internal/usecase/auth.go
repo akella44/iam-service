@@ -33,6 +33,8 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid refresh token")
 	// ErrExpiredRefreshToken indicates the provided refresh token has expired.
 	ErrExpiredRefreshToken = errors.New("refresh token expired")
+	// ErrStaleRefreshToken indicates the provided refresh token was issued against an out-of-date session version.
+	ErrStaleRefreshToken = errors.New("refresh token stale")
 	// ErrRefreshTokenUnavailable indicates refresh token issuance is not configured.
 	ErrRefreshTokenUnavailable = errors.New("refresh token unavailable")
 	// ErrInvalidAccessToken indicates the provided access token is malformed or signature validation failed.
@@ -122,29 +124,32 @@ type LoginResult struct {
 }
 
 type refreshTokenParams struct {
-	user      domain.User
-	sessionID string
-	familyID  string
-	ip        string
-	userAgent string
-	metadata  map[string]any
-	issuedAt  time.Time
+	user           domain.User
+	sessionID      string
+	sessionVersion int64
+	familyID       string
+	ip             string
+	userAgent      string
+	metadata       map[string]any
+	issuedAt       time.Time
 }
 
 // AuthService coordinates authentication flows.
 type AuthService struct {
-	cfg            *config.AppConfig
-	users          port.UserRepository
-	roles          port.RoleRepository
-	permissions    port.PermissionRepository
-	sessions       port.SessionRepository
-	tokens         port.TokenRepository
-	tokenGenerator *security.TokenGenerator
-	keyProvider    security.KeyProvider
-	rateLimits     port.RateLimitStore
-	logger         *zap.Logger
-	now            func() time.Time
-	sessionManager *SessionService
+	cfg               *config.AppConfig
+	users             port.UserRepository
+	roles             port.RoleRepository
+	permissions       port.PermissionRepository
+	sessions          port.SessionRepository
+	tokens            port.TokenRepository
+	tokenGenerator    *security.TokenGenerator
+	keyProvider       security.KeyProvider
+	rateLimits        port.RateLimitStore
+	sessionVersions   port.SessionVersionCache
+	sessionVersionTTL time.Duration
+	logger            *zap.Logger
+	now               func() time.Time
+	sessionManager    *SessionService
 }
 
 // NewAuthService constructs an AuthService instance.
@@ -177,6 +182,12 @@ func NewAuthService(
 		logger:         logger,
 	}
 	service.now = func() time.Time { return time.Now().UTC() }
+	if cfg != nil {
+		service.sessionVersionTTL = cfg.Redis.SessionVersionTTL
+	}
+	if service.sessionVersionTTL <= 0 {
+		service.sessionVersionTTL = 10 * time.Minute
+	}
 	return service, nil
 }
 
@@ -191,6 +202,20 @@ func (s *AuthService) WithClock(now func() time.Time) *AuthService {
 // WithSessionService injects the session management service for coordinated revocation workflows.
 func (s *AuthService) WithSessionService(manager *SessionService) *AuthService {
 	s.sessionManager = manager
+	return s
+}
+
+// WithSessionVersionCache wires the session version cache dependencies into the auth service.
+func (s *AuthService) WithSessionVersionCache(cache port.SessionVersionCache, ttl time.Duration) *AuthService {
+	if cache != nil {
+		s.sessionVersions = cache
+		if ttl > 0 {
+			s.sessionVersionTTL = ttl
+		}
+		if s.sessionVersionTTL <= 0 {
+			s.sessionVersionTTL = 10 * time.Minute
+		}
+	}
 	return s
 }
 
@@ -226,7 +251,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 		return nil, err
 	}
 
-	accessToken, claims, err := s.issueAccessToken(ctx, *user, roles, session.ID, now)
+	accessToken, claims, err := s.issueAccessToken(ctx, *user, roles, session.ID, session.Version, now)
 	if err != nil {
 		s.safeRevokeSession(ctx, session.ID, "access_token_failure")
 		return nil, err
@@ -252,13 +277,14 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	}
 
 	refreshRaw, refreshRecord, err := s.generateRefreshToken(ctx, refreshTokenParams{
-		user:      *user,
-		sessionID: session.ID,
-		familyID:  session.FamilyID,
-		ip:        strings.TrimSpace(input.IP),
-		userAgent: strings.TrimSpace(input.UserAgent),
-		metadata:  buildLoginMetadata(input),
-		issuedAt:  now,
+		user:           *user,
+		sessionID:      session.ID,
+		sessionVersion: session.Version,
+		familyID:       session.FamilyID,
+		ip:             strings.TrimSpace(input.IP),
+		userAgent:      strings.TrimSpace(input.UserAgent),
+		metadata:       buildLoginMetadata(input),
+		issuedAt:       now,
 	})
 	if err != nil {
 		s.safeRevokeSession(ctx, session.ID, "refresh_token_failure")
@@ -294,7 +320,7 @@ func (s *AuthService) Authenticate(ctx context.Context, identifier, password str
 	}
 
 	now := s.now()
-	token, claims, err := s.issueAccessToken(ctx, *user, roles, "", now)
+	token, claims, err := s.issueAccessToken(ctx, *user, roles, "", 0, now)
 	if err != nil {
 		return "", domain.User{}, nil, err
 	}
@@ -313,7 +339,7 @@ func (s *AuthService) IssueToken(ctx context.Context, user domain.User, roles []
 	}
 
 	userCopy := sanitizeUser(user)
-	token, claims, err := s.issueAccessToken(ctx, userCopy, roles, "", s.now())
+	token, claims, err := s.issueAccessToken(ctx, userCopy, roles, "", 0, s.now())
 	if err != nil {
 		return "", err
 	}
@@ -325,8 +351,11 @@ func (s *AuthService) IssueToken(ctx context.Context, user domain.User, roles []
 	return token, nil
 }
 
-// ParseAccessToken validates the JWT access token and returns its claims.
-func (s *AuthService) ParseAccessToken(token string) (*security.AccessTokenClaims, error) {
+// ParseAccessToken validates the JWT access token, enforcing session revocation and version checks, and returns its claims.
+func (s *AuthService) ParseAccessToken(ctx context.Context, token string) (*security.AccessTokenClaims, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, fmt.Errorf("access token is required")
@@ -367,7 +396,102 @@ func (s *AuthService) ParseAccessToken(token string) (*security.AccessTokenClaim
 		return nil, ErrInvalidAccessToken
 	}
 
+	if err := s.validateSessionBinding(ctx, claims); err != nil {
+		return nil, err
+	}
+
 	return claims, nil
+}
+
+func (s *AuthService) validateSessionBinding(ctx context.Context, claims *security.AccessTokenClaims) error {
+	if claims == nil {
+		return fmt.Errorf("access token claims required")
+	}
+
+	sessionID := strings.TrimSpace(claims.SessionID)
+	if sessionID == "" {
+		return nil
+	}
+
+	if s.sessions == nil {
+		s.logger.Warn("session repository missing for session-bound token", zap.String("session_id", sessionID))
+		return ErrInvalidAccessToken
+	}
+
+	currentVersion, err := s.resolveSessionVersionForToken(ctx, sessionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrSessionRevoked):
+			s.logger.Warn("rejecting access token for revoked session", zap.String("session_id", sessionID))
+			return ErrInvalidAccessToken
+		case errors.Is(err, ErrSessionExpired):
+			s.logger.Warn("rejecting access token for expired session", zap.String("session_id", sessionID))
+			return ErrInvalidAccessToken
+		case errors.Is(err, repository.ErrNotFound):
+			s.logger.Warn("rejecting access token for missing session", zap.String("session_id", sessionID))
+			return ErrInvalidAccessToken
+		default:
+			return err
+		}
+	}
+
+	tokenVersion := claims.SessionVersion
+	if tokenVersion <= 0 && currentVersion > 0 {
+		s.logger.Warn("rejecting access token missing session version", zap.String("session_id", sessionID), zap.Int64("current_version", currentVersion))
+		return ErrInvalidAccessToken
+	}
+
+	if tokenVersion > 0 && currentVersion > tokenVersion {
+		s.logger.Warn("rejecting stale access token", zap.String("session_id", sessionID), zap.Int64("token_version", tokenVersion), zap.Int64("current_version", currentVersion))
+		return ErrInvalidAccessToken
+	}
+
+	return nil
+}
+
+func (s *AuthService) resolveSessionVersionForToken(ctx context.Context, sessionID string) (int64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, fmt.Errorf("session id is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if s.sessionVersions != nil {
+		if cached, err := s.sessionVersions.GetSessionVersion(ctx, sessionID); err == nil {
+			if cached > 0 {
+				return cached, nil
+			}
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			s.logger.Warn("fetch cached session version failed", zap.String("session_id", sessionID), zap.Error(err))
+		}
+	}
+
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("fetch session: %w", err)
+	}
+
+	if session.RevokedAt != nil {
+		if session.Version > 0 {
+			s.cacheSessionVersion(ctx, sessionID, session.Version)
+		}
+		return session.Version, ErrSessionRevoked
+	}
+
+	if s.now().After(session.ExpiresAt) {
+		if session.Version > 0 {
+			s.cacheSessionVersion(ctx, sessionID, session.Version)
+		}
+		return session.Version, ErrSessionExpired
+	}
+
+	if session.Version > 0 {
+		s.cacheSessionVersion(ctx, sessionID, session.Version)
+	}
+
+	return session.Version, nil
 }
 
 func (s *AuthService) collectRoles(ctx context.Context, userID string) ([]string, error) {
@@ -543,6 +667,34 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		return "", "", domain.User{}, nil, ErrInactiveAccount
 	}
 
+	sessionID := ""
+	if record.SessionID != nil {
+		sessionID = strings.TrimSpace(*record.SessionID)
+	}
+
+	var session *domain.Session
+	if sessionID != "" && s.sessions != nil {
+		sessionRecord, err := s.sessions.Get(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return "", "", domain.User{}, nil, ErrInvalidRefreshToken
+			}
+			return "", "", domain.User{}, nil, fmt.Errorf("lookup session: %w", err)
+		}
+		session = sessionRecord
+		if session.RevokedAt != nil {
+			return "", "", domain.User{}, nil, ErrSessionRevoked
+		}
+		if now.After(session.ExpiresAt) {
+			return "", "", domain.User{}, nil, ErrSessionExpired
+		}
+
+		s.cacheSessionVersion(ctx, sessionID, session.Version)
+		if record.IsStale(session.Version) {
+			return "", "", domain.User{}, nil, ErrStaleRefreshToken
+		}
+	}
+
 	if err := s.tokens.MarkRefreshTokenUsed(ctx, record.ID, now); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			s.handleRefreshReplay(ctx, record)
@@ -560,26 +712,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		return "", "", domain.User{}, nil, err
 	}
 
-	var sessionID string
-	if record.SessionID != nil {
-		sessionID = strings.TrimSpace(*record.SessionID)
-	}
-
-	if sessionID != "" && s.sessions != nil {
-		session, err := s.sessions.Get(ctx, sessionID)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return "", "", domain.User{}, nil, ErrInvalidRefreshToken
-			}
-			return "", "", domain.User{}, nil, fmt.Errorf("lookup session: %w", err)
-		}
-		if session.RevokedAt != nil {
-			return "", "", domain.User{}, nil, ErrSessionRevoked
-		}
-		if now.After(session.ExpiresAt) {
-			return "", "", domain.User{}, nil, ErrSessionExpired
-		}
-
+	if session != nil {
 		if err := s.sessions.UpdateLastSeen(ctx, sessionID, record.IP, record.UserAgent); err != nil && !errors.Is(err, repository.ErrNotFound) {
 			s.logger.Warn("update session last seen failed", zap.String("session_id", sessionID), zap.Error(err))
 		}
@@ -587,7 +720,24 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 
 	sanitizedUser := sanitizeUser(*user)
 
-	accessToken, claims, err := s.issueAccessToken(ctx, sanitizedUser, roles, sessionID, now)
+	sessionVersion := int64(0)
+	if session != nil {
+		bumpedVersion, bumpErr := s.incrementSessionVersion(ctx, session.ID, "refresh_rotation")
+		if bumpErr != nil {
+			if errors.Is(bumpErr, repository.ErrNotFound) {
+				return "", "", domain.User{}, nil, ErrInvalidRefreshToken
+			}
+			return "", "", domain.User{}, nil, fmt.Errorf("increment session version: %w", bumpErr)
+		}
+		if bumpedVersion > 0 {
+			sessionVersion = bumpedVersion
+			session.Version = bumpedVersion
+		} else {
+			sessionVersion = session.Version
+		}
+	}
+
+	accessToken, claims, err := s.issueAccessToken(ctx, sanitizedUser, roles, sessionID, sessionVersion, now)
 	if err != nil {
 		return "", "", domain.User{}, nil, err
 	}
@@ -611,13 +761,14 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 	}
 
 	newRefreshToken, _, err := s.generateRefreshToken(ctx, refreshTokenParams{
-		user:      sanitizedUser,
-		sessionID: sessionID,
-		familyID:  record.FamilyID,
-		ip:        ip,
-		userAgent: userAgent,
-		metadata:  metadata,
-		issuedAt:  now,
+		user:           sanitizedUser,
+		sessionID:      sessionID,
+		sessionVersion: sessionVersion,
+		familyID:       record.FamilyID,
+		ip:             ip,
+		userAgent:      userAgent,
+		metadata:       metadata,
+		issuedAt:       now,
 	})
 	if err != nil {
 		return "", "", domain.User{}, nil, err
@@ -751,7 +902,7 @@ func (s *AuthService) authenticateUser(ctx context.Context, identifier, password
 	return &sanitized, roles, nil
 }
 
-func (s *AuthService) issueAccessToken(ctx context.Context, user domain.User, roles []string, sessionID string, issuedAt time.Time) (string, *security.AccessTokenClaims, error) {
+func (s *AuthService) issueAccessToken(ctx context.Context, user domain.User, roles []string, sessionID string, sessionVersion int64, issuedAt time.Time) (string, *security.AccessTokenClaims, error) {
 	if strings.TrimSpace(user.ID) == "" {
 		return "", nil, fmt.Errorf("user id is required")
 	}
@@ -781,17 +932,22 @@ func (s *AuthService) issueAccessToken(ctx context.Context, user domain.User, ro
 		jti = security.HashToken(user.ID + now.String())
 	}
 
+	if sessionVersion < 0 {
+		sessionVersion = 0
+	}
+
 	claims, err := security.NewAccessTokenClaims(security.AccessTokenOptions{
-		UserID:    user.ID,
-		SessionID: sessionID,
-		Roles:     roles,
-		Issuer:    s.cfg.App.Name,
-		Audience:  []string(audience),
-		Subject:   subject,
-		TTL:       ttl,
-		IssuedAt:  now,
-		NotBefore: now,
-		JTI:       jti,
+		UserID:         user.ID,
+		SessionID:      sessionID,
+		SessionVersion: sessionVersion,
+		Roles:          roles,
+		Issuer:         s.cfg.App.Name,
+		Audience:       []string(audience),
+		Subject:        subject,
+		TTL:            ttl,
+		IssuedAt:       now,
+		NotBefore:      now,
+		JTI:            jti,
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("build access token claims: %w", err)
@@ -870,9 +1026,13 @@ func (s *AuthService) createSession(ctx context.Context, user domain.User, input
 		session.UserAgent = stringPtr(ua)
 	}
 
+	session.Version = 1
+
 	if err := s.sessions.Create(ctx, session); err != nil {
 		return domain.Session{}, fmt.Errorf("create session: %w", err)
 	}
+
+	s.cacheSessionVersion(ctx, session.ID, session.Version)
 
 	details := map[string]any{
 		"user_id": user.ID,
@@ -925,6 +1085,42 @@ func (s *AuthService) refreshTTL() time.Duration {
 	return ttl
 }
 
+func (s *AuthService) cacheSessionVersion(ctx context.Context, sessionID string, version int64) {
+	if s.sessionVersions == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || version <= 0 {
+		return
+	}
+	if s.sessionVersionTTL <= 0 {
+		s.sessionVersionTTL = 10 * time.Minute
+	}
+	if err := s.sessionVersions.SetSessionVersion(ctx, sessionID, version, s.sessionVersionTTL); err != nil {
+		s.logger.Warn("cache session version failed", zap.String("session_id", sessionID), zap.Error(err))
+	}
+}
+
+func (s *AuthService) incrementSessionVersion(ctx context.Context, sessionID, reason string) (int64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, nil
+	}
+	if s.sessions == nil {
+		return 0, fmt.Errorf("session repository not configured")
+	}
+	normalizedReason := strings.TrimSpace(reason)
+	if normalizedReason == "" {
+		normalizedReason = "session_version_bump"
+	}
+	version, err := s.sessions.IncrementVersion(ctx, sessionID, normalizedReason)
+	if err != nil {
+		return 0, err
+	}
+	s.cacheSessionVersion(ctx, sessionID, version)
+	return version, nil
+}
+
 func (s *AuthService) generateRefreshToken(ctx context.Context, params refreshTokenParams) (string, *domain.RefreshToken, error) {
 	if strings.TrimSpace(params.user.ID) == "" {
 		return "", nil, fmt.Errorf("user id is required")
@@ -948,15 +1144,24 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, params refreshTo
 		familyID = uuid.NewString()
 	}
 
+	sessionVersion := params.sessionVersion
+	if sessionVersion < 0 {
+		sessionVersion = 0
+	}
+	if params.sessionID != "" && sessionVersion <= 0 {
+		sessionVersion = 1
+	}
+
 	record := domain.RefreshToken{
-		ID:        uuid.NewString(),
-		UserID:    params.user.ID,
-		SessionID: nil,
-		TokenHash: security.HashToken(raw),
-		FamilyID:  familyID,
-		CreatedAt: issuedAt,
-		ExpiresAt: issuedAt.Add(s.refreshTTL()),
-		Metadata:  metadataCopy(params.metadata),
+		ID:            uuid.NewString(),
+		UserID:        params.user.ID,
+		SessionID:     nil,
+		TokenHash:     security.HashToken(raw),
+		FamilyID:      familyID,
+		IssuedVersion: sessionVersion,
+		CreatedAt:     issuedAt,
+		ExpiresAt:     issuedAt.Add(s.refreshTTL()),
+		Metadata:      metadataCopy(params.metadata),
 	}
 
 	if params.sessionID != "" {

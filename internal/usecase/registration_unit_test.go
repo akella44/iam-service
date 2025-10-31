@@ -232,6 +232,10 @@ func (m *mockTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (in
 	return 0, errors.New("unexpected call: CleanupExpiredJTIs")
 }
 
+func (m *mockTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
+	return errors.New("unexpected call: UpdateRefreshTokenIssuedVersion")
+}
+
 func newRegistrationService(userRepo *mockUserRepository, tokenRepo *mockTokenRepository, publisher port.EventPublisher) *RegistrationService {
 	return NewRegistrationService(userRepo, tokenRepo, security.NewPasswordPolicy(), publisher)
 }

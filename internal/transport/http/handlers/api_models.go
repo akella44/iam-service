@@ -50,11 +50,12 @@ type AuthLoginRequest struct {
 
 // SessionSummary provides a compact view of session context in login responses.
 type SessionSummary struct {
-	ID          string    `json:"id"`
-	DeviceLabel *string   `json:"device_label,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	LastSeen    time.Time `json:"last_seen"`
+	ID             string    `json:"id"`
+	DeviceLabel    *string   `json:"device_label,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	LastSeen       time.Time `json:"last_seen"`
+	SessionVersion int64     `json:"session_version"`
 }
 
 // AuthLoginResponse describes the response returned for a successful login.
@@ -195,6 +196,8 @@ type SessionPayload struct {
 	RevokeReason   *string    `json:"revoke_reason,omitempty"`
 	IsActive       bool       `json:"is_active"`
 	IsCurrent      bool       `json:"is_current,omitempty"`
+	SessionVersion int64      `json:"session_version"`
+	IssuedVersion  *int64     `json:"issued_version,omitempty"`
 }
 
 // SessionValidateRequest contains the session ID to validate
@@ -340,12 +343,13 @@ func newUserSummary(user domain.User, roles []string) UserSummary {
 // newSessionPayload converts a domain session to an API session payload.
 func newSessionPayload(session domain.Session) SessionPayload {
 	payload := SessionPayload{
-		ID:        session.ID,
-		UserID:    session.UserID,
-		CreatedAt: session.CreatedAt,
-		LastSeen:  session.LastSeen,
-		ExpiresAt: session.ExpiresAt,
-		IsActive:  session.IsActive(time.Now().UTC()),
+		ID:             session.ID,
+		UserID:         session.UserID,
+		CreatedAt:      session.CreatedAt,
+		LastSeen:       session.LastSeen,
+		ExpiresAt:      session.ExpiresAt,
+		IsActive:       session.IsActive(time.Now().UTC()),
+		SessionVersion: session.Version,
 	}
 
 	if session.RefreshTokenID != nil {
@@ -372,16 +376,20 @@ func newSessionPayload(session domain.Session) SessionPayload {
 	if session.RevokeReason != nil {
 		payload.RevokeReason = session.RevokeReason
 	}
+	if session.IssuedVersion != nil {
+		payload.IssuedVersion = session.IssuedVersion
+	}
 
 	return payload
 }
 
 func newSessionSummary(session domain.Session) SessionSummary {
 	summary := SessionSummary{
-		ID:        session.ID,
-		CreatedAt: session.CreatedAt,
-		ExpiresAt: session.ExpiresAt,
-		LastSeen:  session.LastSeen,
+		ID:             session.ID,
+		CreatedAt:      session.CreatedAt,
+		ExpiresAt:      session.ExpiresAt,
+		LastSeen:       session.LastSeen,
+		SessionVersion: session.Version,
 	}
 
 	if session.DeviceLabel != nil {

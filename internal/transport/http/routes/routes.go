@@ -85,12 +85,7 @@ func Register(deps Dependencies) *gin.Engine {
 
 		authGroup := api.Group("/auth")
 
-		authHandler := handlers.NewAuthHandler(
-			deps.Services.Auth,
-			handlers.WithRegistrationService(deps.Services.Registration),
-			handlers.WithNotificationDispatcher(notificationDispatcher),
-			handlers.WithDevMode(isDev),
-		)
+		authHandler := handlers.NewAuthHandler(deps.Services.Auth)
 
 		loginMiddlewares := buildLoginMiddlewares(deps)
 		authHandler.RegisterRoutes(authGroup, loginMiddlewares...)

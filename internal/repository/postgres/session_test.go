@@ -25,6 +25,7 @@ func TestSessionRepository_Create(t *testing.T) {
 		ID:        "session-123",
 		UserID:    "user-123",
 		FamilyID:  "family-123",
+		Version:   1,
 		CreatedAt: createdAt,
 		LastSeen:  createdAt,
 		ExpiresAt: createdAt.Add(24 * time.Hour),
@@ -36,6 +37,7 @@ func TestSessionRepository_Create(t *testing.T) {
 			session.ID,
 			session.UserID,
 			session.FamilyID,
+			session.Version,
 			nil,
 			deviceID,
 			nil,
@@ -75,9 +77,9 @@ func TestSessionRepository_Get(t *testing.T) {
 	ip := "198.51.100.10"
 
 	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "family_id", "refresh_token_id", "device_id", "device_label", "ip_first", "ip_last", "user_agent", "created_at", "last_seen", "expires_at", "revoked_at", "revoke_reason",
+		"id", "user_id", "family_id", "session_version", "refresh_token_id", "device_id", "device_label", "ip_first", "ip_last", "user_agent", "created_at", "last_seen", "expires_at", "revoked_at", "revoke_reason", "issued_version",
 	}).AddRow(
-		"session-1", "user-1", "family-1", refreshID, nil, deviceLabel, ip, ip, "UA", createdAt, createdAt, expiresAt, nil, nil,
+		"session-1", "user-1", "family-1", int64(2), refreshID, nil, deviceLabel, ip, ip, "UA", createdAt, createdAt, expiresAt, nil, nil, int64(2),
 	)
 
 	mock.ExpectQuery(`SELECT .*FROM iam\.sessions`).WithArgs("session-1").WillReturnRows(rows)
@@ -98,6 +100,9 @@ func TestSessionRepository_Get(t *testing.T) {
 	if session.IPFirst == nil || *session.IPFirst != ip || session.IPLast == nil || *session.IPLast != ip {
 		t.Fatalf("expected ip metadata to match")
 	}
+	if session.IssuedVersion == nil || *session.IssuedVersion != 2 {
+		t.Fatalf("expected issued version to be 2, got %v", session.IssuedVersion)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -116,11 +121,11 @@ func TestSessionRepository_ListByUser(t *testing.T) {
 	now := time.Now().UTC()
 
 	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "family_id", "refresh_token_id", "device_id", "device_label", "ip_first", "ip_last", "user_agent", "created_at", "last_seen", "expires_at", "revoked_at", "revoke_reason",
+		"id", "user_id", "family_id", "session_version", "refresh_token_id", "device_id", "device_label", "ip_first", "ip_last", "user_agent", "created_at", "last_seen", "expires_at", "revoked_at", "revoke_reason", "issued_version",
 	}).AddRow(
-		"session-1", "user-1", "family-1", nil, nil, nil, nil, nil, nil, now, now, now.Add(time.Hour), nil, nil,
+		"session-1", "user-1", "family-1", int64(1), nil, nil, nil, nil, nil, nil, now, now, now.Add(time.Hour), nil, nil, int64(1),
 	).AddRow(
-		"session-2", "user-1", "family-2", nil, nil, nil, nil, nil, nil, now, now, now.Add(2*time.Hour), nil, nil,
+		"session-2", "user-1", "family-2", int64(1), nil, nil, nil, nil, nil, nil, now, now, now.Add(2*time.Hour), nil, nil, nil,
 	)
 
 	mock.ExpectQuery(`SELECT .*FROM iam\.sessions`).WithArgs("user-1").WillReturnRows(rows)
@@ -134,6 +139,12 @@ func TestSessionRepository_ListByUser(t *testing.T) {
 	}
 	if sessions[0].ID != "session-1" || sessions[1].ID != "session-2" {
 		t.Fatalf("unexpected session order: %+v", sessions)
+	}
+	if sessions[0].IssuedVersion == nil || *sessions[0].IssuedVersion != 1 {
+		t.Fatalf("expected first session issued version 1, got %v", sessions[0].IssuedVersion)
+	}
+	if sessions[1].IssuedVersion != nil {
+		t.Fatalf("expected second session issued version nil, got %v", sessions[1].IssuedVersion)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -19,30 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TokenService_ValidateToken_FullMethodName    = "/iam.v1.TokenService/ValidateToken"
-	TokenService_Introspect_FullMethodName       = "/iam.v1.TokenService/Introspect"
-	TokenService_RevokeByJTI_FullMethodName      = "/iam.v1.TokenService/RevokeByJTI"
-	TokenService_RevokeBySession_FullMethodName  = "/iam.v1.TokenService/RevokeBySession"
-	TokenService_RevokeAllForUser_FullMethodName = "/iam.v1.TokenService/RevokeAllForUser"
-	TokenService_GetJWKS_FullMethodName          = "/iam.v1.TokenService/GetJWKS"
+	TokenService_GetJWKS_FullMethodName = "/iam.v1.TokenService/GetJWKS"
 )
 
 // TokenServiceClient is the client API for TokenService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// TokenService provides token validation and revocation for internal services.
+// TokenService exposes JWKS over gRPC for internal consumers.
 type TokenServiceClient interface {
-	// ValidateToken performs offline validation of a JWT access token.
-	ValidateToken(ctx context.Context, in *ValidateTokenRequest, opts ...grpc.CallOption) (*ValidateTokenResponse, error)
-	// Introspect performs a comprehensive validation including revocation status.
-	Introspect(ctx context.Context, in *IntrospectRequest, opts ...grpc.CallOption) (*IntrospectResponse, error)
-	// RevokeByJTI revokes a specific access token by its JWT ID.
-	RevokeByJTI(ctx context.Context, in *RevokeByJTIRequest, opts ...grpc.CallOption) (*RevokeResponse, error)
-	// RevokeBySession revokes all tokens associated with a session.
-	RevokeBySession(ctx context.Context, in *RevokeBySessionRequest, opts ...grpc.CallOption) (*RevokeResponse, error)
-	// RevokeAllForUser revokes all tokens for the supplied user.
-	RevokeAllForUser(ctx context.Context, in *RevokeAllForUserRequest, opts ...grpc.CallOption) (*RevokeResponse, error)
 	// GetJWKS returns the JSON Web Key Set for offline JWT validation.
 	GetJWKS(ctx context.Context, in *GetJWKSRequest, opts ...grpc.CallOption) (*GetJWKSResponse, error)
 }
@@ -53,56 +38,6 @@ type tokenServiceClient struct {
 
 func NewTokenServiceClient(cc grpc.ClientConnInterface) TokenServiceClient {
 	return &tokenServiceClient{cc}
-}
-
-func (c *tokenServiceClient) ValidateToken(ctx context.Context, in *ValidateTokenRequest, opts ...grpc.CallOption) (*ValidateTokenResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ValidateTokenResponse)
-	err := c.cc.Invoke(ctx, TokenService_ValidateToken_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tokenServiceClient) Introspect(ctx context.Context, in *IntrospectRequest, opts ...grpc.CallOption) (*IntrospectResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IntrospectResponse)
-	err := c.cc.Invoke(ctx, TokenService_Introspect_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tokenServiceClient) RevokeByJTI(ctx context.Context, in *RevokeByJTIRequest, opts ...grpc.CallOption) (*RevokeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RevokeResponse)
-	err := c.cc.Invoke(ctx, TokenService_RevokeByJTI_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tokenServiceClient) RevokeBySession(ctx context.Context, in *RevokeBySessionRequest, opts ...grpc.CallOption) (*RevokeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RevokeResponse)
-	err := c.cc.Invoke(ctx, TokenService_RevokeBySession_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tokenServiceClient) RevokeAllForUser(ctx context.Context, in *RevokeAllForUserRequest, opts ...grpc.CallOption) (*RevokeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RevokeResponse)
-	err := c.cc.Invoke(ctx, TokenService_RevokeAllForUser_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *tokenServiceClient) GetJWKS(ctx context.Context, in *GetJWKSRequest, opts ...grpc.CallOption) (*GetJWKSResponse, error) {
@@ -119,18 +54,8 @@ func (c *tokenServiceClient) GetJWKS(ctx context.Context, in *GetJWKSRequest, op
 // All implementations must embed UnimplementedTokenServiceServer
 // for forward compatibility.
 //
-// TokenService provides token validation and revocation for internal services.
+// TokenService exposes JWKS over gRPC for internal consumers.
 type TokenServiceServer interface {
-	// ValidateToken performs offline validation of a JWT access token.
-	ValidateToken(context.Context, *ValidateTokenRequest) (*ValidateTokenResponse, error)
-	// Introspect performs a comprehensive validation including revocation status.
-	Introspect(context.Context, *IntrospectRequest) (*IntrospectResponse, error)
-	// RevokeByJTI revokes a specific access token by its JWT ID.
-	RevokeByJTI(context.Context, *RevokeByJTIRequest) (*RevokeResponse, error)
-	// RevokeBySession revokes all tokens associated with a session.
-	RevokeBySession(context.Context, *RevokeBySessionRequest) (*RevokeResponse, error)
-	// RevokeAllForUser revokes all tokens for the supplied user.
-	RevokeAllForUser(context.Context, *RevokeAllForUserRequest) (*RevokeResponse, error)
 	// GetJWKS returns the JSON Web Key Set for offline JWT validation.
 	GetJWKS(context.Context, *GetJWKSRequest) (*GetJWKSResponse, error)
 	mustEmbedUnimplementedTokenServiceServer()
@@ -143,21 +68,6 @@ type TokenServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedTokenServiceServer struct{}
 
-func (UnimplementedTokenServiceServer) ValidateToken(context.Context, *ValidateTokenRequest) (*ValidateTokenResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ValidateToken not implemented")
-}
-func (UnimplementedTokenServiceServer) Introspect(context.Context, *IntrospectRequest) (*IntrospectResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Introspect not implemented")
-}
-func (UnimplementedTokenServiceServer) RevokeByJTI(context.Context, *RevokeByJTIRequest) (*RevokeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeByJTI not implemented")
-}
-func (UnimplementedTokenServiceServer) RevokeBySession(context.Context, *RevokeBySessionRequest) (*RevokeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeBySession not implemented")
-}
-func (UnimplementedTokenServiceServer) RevokeAllForUser(context.Context, *RevokeAllForUserRequest) (*RevokeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeAllForUser not implemented")
-}
 func (UnimplementedTokenServiceServer) GetJWKS(context.Context, *GetJWKSRequest) (*GetJWKSResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetJWKS not implemented")
 }
@@ -180,96 +90,6 @@ func RegisterTokenServiceServer(s grpc.ServiceRegistrar, srv TokenServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&TokenService_ServiceDesc, srv)
-}
-
-func _TokenService_ValidateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ValidateTokenRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TokenServiceServer).ValidateToken(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TokenService_ValidateToken_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TokenServiceServer).ValidateToken(ctx, req.(*ValidateTokenRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TokenService_Introspect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(IntrospectRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TokenServiceServer).Introspect(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TokenService_Introspect_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TokenServiceServer).Introspect(ctx, req.(*IntrospectRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TokenService_RevokeByJTI_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevokeByJTIRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TokenServiceServer).RevokeByJTI(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TokenService_RevokeByJTI_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TokenServiceServer).RevokeByJTI(ctx, req.(*RevokeByJTIRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TokenService_RevokeBySession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevokeBySessionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TokenServiceServer).RevokeBySession(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TokenService_RevokeBySession_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TokenServiceServer).RevokeBySession(ctx, req.(*RevokeBySessionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TokenService_RevokeAllForUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevokeAllForUserRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TokenServiceServer).RevokeAllForUser(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TokenService_RevokeAllForUser_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TokenServiceServer).RevokeAllForUser(ctx, req.(*RevokeAllForUserRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _TokenService_GetJWKS_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -297,26 +117,6 @@ var TokenService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "iam.v1.TokenService",
 	HandlerType: (*TokenServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "ValidateToken",
-			Handler:    _TokenService_ValidateToken_Handler,
-		},
-		{
-			MethodName: "Introspect",
-			Handler:    _TokenService_Introspect_Handler,
-		},
-		{
-			MethodName: "RevokeByJTI",
-			Handler:    _TokenService_RevokeByJTI_Handler,
-		},
-		{
-			MethodName: "RevokeBySession",
-			Handler:    _TokenService_RevokeBySession_Handler,
-		},
-		{
-			MethodName: "RevokeAllForUser",
-			Handler:    _TokenService_RevokeAllForUser_Handler,
-		},
 		{
 			MethodName: "GetJWKS",
 			Handler:    _TokenService_GetJWKS_Handler,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	uuid "github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/arklim/social-platform-iam/internal/core/domain"
 	"github.com/arklim/social-platform-iam/internal/core/port"
@@ -40,6 +41,7 @@ type RegistrationService struct {
 	passwordPolicy port.PasswordPolicyValidator
 	now            func() time.Time
 	historyLimit   int
+	logger         *zap.Logger
 }
 
 // NewRegistrationService constructs a registration service.
@@ -54,8 +56,17 @@ func NewRegistrationService(users port.UserRepository, tokens port.TokenReposito
 		passwordPolicy: policy,
 		now:            time.Now,
 		historyLimit:   defaultPasswordHistoryEntries,
+		logger:         zap.NewNop(),
 	}
 	return service
+}
+
+// WithLogger attaches a logger to the service for observability.
+func (s *RegistrationService) WithLogger(logger *zap.Logger) *RegistrationService {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
 }
 
 // WithClock overrides the time source for deterministic testing.
@@ -203,7 +214,11 @@ func (s *RegistrationService) RegisterUser(ctx context.Context, username, email,
 	}
 
 	if err := s.publishUserRegistered(ctx, user, result.Delivery); err != nil {
-		return domain.User{}, zero, fmt.Errorf("publish register event: %w", err)
+		s.logger.Warn("publish user registered event failed",
+			zap.String("user_id", user.ID),
+			zap.String("username", user.Username),
+			zap.Error(err),
+		)
 	}
 
 	return user, result, nil
@@ -280,8 +295,7 @@ func (s *RegistrationService) publishUserRegistered(ctx context.Context, user do
 	}
 
 	if err := s.events.PublishUserRegistered(ctx, event); err != nil {
-		return fmt.Errorf("%w: cannot publish message", err)
-		//TODO: make proper impl with logger
+		return fmt.Errorf("publish user registered event: %w", err)
 	}
 	return nil
 }

@@ -5,13 +5,18 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/arklim/social-platform-iam/internal/transport/http/middleware"
 )
 
 // ErrorCase maps a sentinel error to an HTTP status code and response message.
 type ErrorCase struct {
-	Err     error
-	Status  int
-	Message string
+	Err           error
+	Status        int
+	Message       string
+	ProblemType   string
+	ProblemTitle  string
+	ProblemDetail string
 }
 
 // RespondWithMappedError resolves the provided error against known cases or falls back to a generic response.
@@ -26,7 +31,35 @@ func RespondWithMappedError(c *gin.Context, err error, cases []ErrorCase, fallba
 			continue
 		}
 		if errors.Is(err, cs.Err) {
-			c.JSON(cs.Status, NewErrorResponse(c, cs.Message))
+			status := cs.Status
+			if status <= 0 {
+				status = fallbackStatus
+			}
+			if cs.ProblemType != "" {
+				detail := cs.ProblemDetail
+				if detail == "" {
+					detail = cs.Message
+				}
+				title := cs.ProblemTitle
+				if title == "" {
+					title = http.StatusText(status)
+				}
+				instance := c.FullPath()
+				if instance == "" {
+					instance = c.Request.URL.Path
+				}
+				problem := middleware.ProblemDetails{
+					Type:     cs.ProblemType,
+					Title:    title,
+					Status:   status,
+					Detail:   detail,
+					Instance: instance,
+					TraceID:  middleware.GetTraceID(c),
+				}
+				c.JSON(status, problem)
+				return
+			}
+			c.JSON(status, NewErrorResponse(c, cs.Message))
 			return
 		}
 	}

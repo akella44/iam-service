@@ -21,6 +21,7 @@ type TokenRepository interface {
 	MarkRefreshTokenUsed(ctx context.Context, refreshTokenID string, usedAt time.Time) error
 	RevokeRefreshTokensByFamily(ctx context.Context, familyID string, reason string) (int, error)
 	RevokeRefreshTokensForUser(ctx context.Context, userID string) error
+	UpdateRefreshTokenIssuedVersion(ctx context.Context, refreshTokenID string, version int64) error
 	TrackJTI(ctx context.Context, record domain.AccessTokenJTI) error
 	RevokeJTI(ctx context.Context, revoked domain.RevokedAccessTokenJTI) error
 	RevokeJTIsBySession(ctx context.Context, sessionID string, reason string) (int, error)

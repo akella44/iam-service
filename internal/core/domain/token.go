@@ -4,19 +4,20 @@ import "time"
 
 // RefreshToken represents a long-lived refresh token with rotation support.
 type RefreshToken struct {
-	ID        string
-	UserID    string
-	SessionID *string
-	TokenHash string
-	FamilyID  string
-	ClientID  *string
-	IP        *string
-	UserAgent *string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	UsedAt    *time.Time
-	RevokedAt *time.Time
-	Metadata  map[string]any
+	ID            string
+	UserID        string
+	SessionID     *string
+	TokenHash     string
+	FamilyID      string
+	IssuedVersion int64
+	ClientID      *string
+	IP            *string
+	UserAgent     *string
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
+	UsedAt        *time.Time
+	RevokedAt     *time.Time
+	Metadata      map[string]any
 }
 
 // IsExpired reports whether the token has elapsed its validity window.
@@ -57,6 +58,14 @@ func (t *RefreshToken) Revoke(at time.Time) bool {
 	timeCopy := at
 	t.RevokedAt = &timeCopy
 	return true
+}
+
+// IsStale reports whether the refresh token was issued against an older session version.
+func (t RefreshToken) IsStale(currentSessionVersion int64) bool {
+	if currentSessionVersion <= 0 {
+		return false
+	}
+	return t.IssuedVersion > 0 && t.IssuedVersion < currentSessionVersion
 }
 
 // AccessTokenJTI represents a tracked access token identifier.

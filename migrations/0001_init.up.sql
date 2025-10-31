@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   revoked_at  TIMESTAMPTZ,
   session_id  UUID,
   family_id   UUID NOT NULL DEFAULT gen_random_uuid(),
+  issued_version BIGINT NOT NULL DEFAULT 1,
   used_at     TIMESTAMPTZ,
   metadata    JSONB
 );
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE TABLE IF NOT EXISTS sessions (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_version  BIGINT NOT NULL DEFAULT 1,
   refresh_token_id UUID REFERENCES refresh_tokens(id) ON DELETE SET NULL,
   family_id        UUID NOT NULL DEFAULT gen_random_uuid(),
   device_id        TEXT,
@@ -221,6 +223,35 @@ BEGIN
   RETURN n;
 END$$;
 
+CREATE OR REPLACE FUNCTION session_bump_version(p_session_id UUID, p_reason TEXT DEFAULT 'session_version_bump')
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE
+  new_version BIGINT;
+BEGIN
+  UPDATE sessions
+     SET session_version = session_version + 1
+   WHERE id = p_session_id
+   RETURNING session_version INTO new_version;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'session % not found', p_session_id USING ERRCODE = 'NO_DATA_FOUND';
+  END IF;
+
+  INSERT INTO session_events (id, session_id, kind, details)
+  VALUES (
+    gen_random_uuid(),
+    p_session_id,
+    'session_version_bumped',
+    jsonb_strip_nulls(jsonb_build_object(
+      'reason', NULLIF(trim(COALESCE(p_reason, '')) , ''),
+      'version', new_version
+    ))
+  );
+
+  RETURN new_version;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION session_revoke(p_session_id UUID, p_reason TEXT DEFAULT 'manual_revoke')
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
@@ -300,6 +331,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens__active_user
   WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__family_id ON refresh_tokens(family_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__session_id ON refresh_tokens(session_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens__session_issued_version
+  ON refresh_tokens(session_id, issued_version);
 
 CREATE INDEX IF NOT EXISTS idx_sessions__user_lastseen ON sessions(user_id, last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions__active_user
@@ -312,6 +345,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions__refresh_id ON sessions(refresh_token_id
 CREATE INDEX IF NOT EXISTS idx_sessions__expires    ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions__family_id  ON sessions(family_id);
 CREATE INDEX IF NOT EXISTS idx_sessions__user_id    ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions__session_version
+  ON sessions(session_version);
 
 CREATE INDEX IF NOT EXISTS idx_session_events__sess_at ON session_events(session_id, at DESC);
 

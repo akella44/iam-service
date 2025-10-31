@@ -22,7 +22,7 @@ const (
 
 // TokenParser exposes the access-token parsing capability required by the auth interceptor.
 type TokenParser interface {
-	ParseAccessToken(token string) (*security.AccessTokenClaims, error)
+	ParseAccessToken(ctx context.Context, token string) (*security.AccessTokenClaims, error)
 }
 
 // AuthOptions fine-tunes interceptor behaviour.
@@ -72,7 +72,7 @@ func (ai *AuthInterceptor) UnaryServerInterceptor() grpc.UnaryServerInterceptor 
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
 
-		claims, err := ai.parser.ParseAccessToken(token)
+		claims, err := ai.parser.ParseAccessToken(ctx, token)
 		if err != nil {
 			ai.logger.Warn("gRPC token validation failed", zap.String("method", info.FullMethod), zap.Error(err))
 			switch {

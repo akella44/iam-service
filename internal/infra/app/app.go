@@ -83,7 +83,11 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		return nil, fmt.Errorf("init redis: %w", err)
 	}
 
-	revocationStore := redisrepo.NewRevocationRepository(redisClient.Client(), "iam:token:revocation")
+	sessionVersionCache := redisrepo.NewSessionVersionRepository(redisClient.Client(), cfg.Redis.SessionVersionPrefix)
+	sessionVersionTTL := cfg.Redis.SessionVersionTTL
+	if sessionVersionTTL <= 0 {
+		sessionVersionTTL = 10 * time.Minute
+	}
 
 	repos := postgresrepo.NewRepositories(pool)
 
@@ -124,20 +128,20 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		return nil, fmt.Errorf("init auth service: %w", err)
 	}
 
-	sessionService := usecase.NewSessionService(repos.Sessions, repos.Tokens, eventPublisher, log)
+	sessionService := usecase.NewSessionService(repos.Sessions, repos.Tokens, eventPublisher, log).
+		WithSessionVersionCache(sessionVersionCache, sessionVersionTTL)
 	authService.WithSessionService(sessionService)
+	authService.WithSessionVersionCache(sessionVersionCache, sessionVersionTTL)
 
-	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordPolicy, eventPublisher)
+	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordPolicy, eventPublisher).WithLogger(log)
 	userService := usecase.NewUserService(repos.Users, repos.Permissions, repos.Roles, eventPublisher, passwordValidator)
 	roleService := usecase.NewRoleService(repos.Roles, repos.Permissions, repos.Users)
 	passwordResetService := usecase.NewPasswordResetService(cfg, repos.Users, repos.Tokens, rateLimitStore, eventPublisher, sessionService, passwordValidator, passwordPolicy, log)
-	tokenService := usecase.NewTokenService(cfg, keyProvider, repos.Tokens, repos.Sessions, repos.Users, revocationStore, log)
 
 	grpcSrv, err := transportgrpc.NewServer(transportgrpc.ServerDependencies{
-		AuthService:  authService,
-		TokenService: tokenService,
-		JWTManager:   jwksManager,
-		Logger:       log,
+		AuthService: authService,
+		JWTManager:  jwksManager,
+		Logger:      log,
 		PublicMethods: []string{
 			"/iam.v1.TokenService/GetJWKS",
 		},

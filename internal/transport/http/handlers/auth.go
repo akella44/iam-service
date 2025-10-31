@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/arklim/social-platform-iam/internal/core/domain"
 	"github.com/arklim/social-platform-iam/internal/infra/security"
 	"github.com/arklim/social-platform-iam/internal/repository"
 	"github.com/arklim/social-platform-iam/internal/transport/http/middleware"
@@ -25,63 +23,16 @@ const (
 
 // AuthHandler exposes authentication endpoints.
 type AuthHandler struct {
-	auth         *usecase.AuthService
-	registration *usecase.RegistrationService
-	dispatcher   NotificationDispatcher
-	isDev        bool
-}
-
-// AuthHandlerOption configures optional AuthHandler dependencies.
-type AuthHandlerOption func(*AuthHandler)
-
-// WithRegistrationService injects the registration service dependency.
-func WithRegistrationService(registration *usecase.RegistrationService) AuthHandlerOption {
-	return func(h *AuthHandler) {
-		h.registration = registration
-	}
-}
-
-// WithNotificationDispatcher injects the notification dispatcher used to deliver verification artifacts.
-func WithNotificationDispatcher(dispatcher NotificationDispatcher) AuthHandlerOption {
-	return func(h *AuthHandler) {
-		if dispatcher == nil {
-			dispatcher = noopDispatcher{}
-		}
-		h.dispatcher = dispatcher
-	}
-}
-
-// WithDevMode toggles development-only behaviour (e.g. returning verification tokens).
-func WithDevMode(isDev bool) AuthHandlerOption {
-	return func(h *AuthHandler) {
-		h.isDev = isDev
-	}
+	auth *usecase.AuthService
 }
 
 // NewAuthHandler constructs AuthHandler.
-func NewAuthHandler(auth *usecase.AuthService, opts ...AuthHandlerOption) *AuthHandler {
-	handler := &AuthHandler{
-		auth:       auth,
-		dispatcher: noopDispatcher{},
-	}
-
-	for _, opt := range opts {
-		if opt != nil {
-			opt(handler)
-		}
-	}
-
-	if handler.dispatcher == nil {
-		handler.dispatcher = noopDispatcher{}
-	}
-
-	return handler
+func NewAuthHandler(auth *usecase.AuthService) *AuthHandler {
+	return &AuthHandler{auth: auth}
 }
 
 // RegisterRoutes binds authentication routes, applying optional middleware ahead of handlers.
 func (h *AuthHandler) RegisterRoutes(r *gin.RouterGroup, loginMiddlewares ...gin.HandlerFunc) {
-	r.POST("/register", h.register)
-
 	if len(loginMiddlewares) > 0 {
 		chain := append([]gin.HandlerFunc{}, loginMiddlewares...)
 		chain = append(chain, h.login)
@@ -94,99 +45,6 @@ func (h *AuthHandler) RegisterRoutes(r *gin.RouterGroup, loginMiddlewares ...gin
 	r.POST("/logout", middleware.RequireAuth(h.auth), h.logout)
 }
 
-// Register godoc
-// @Summary Register a new user account
-// @Description Creates a new user with the supplied credentials and contact information.
-// @Tags Authentication
-// @Accept json
-// @Produce json
-// @Param request body RegistrationRequest true "Registration request payload"
-// @Success 201 {object} RegistrationResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 409 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
-// @Failure 503 {object} ErrorResponse
-// @Router /api/v1/auth/register [post]
-func (h *AuthHandler) register(c *gin.Context) {
-	if h.registration == nil {
-		c.JSON(http.StatusServiceUnavailable, NewErrorResponse(c, "registration service unavailable"))
-		return
-	}
-
-	var req RegistrationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, NewErrorResponse(c, "invalid registration payload"))
-		return
-	}
-
-	req.Username = strings.TrimSpace(req.Username)
-	req.Email = strings.TrimSpace(req.Email)
-	req.Phone = strings.TrimSpace(req.Phone)
-
-	if req.Username == "" {
-		c.JSON(http.StatusBadRequest, NewErrorResponse(c, "username is required"))
-		return
-	}
-	if req.Email == "" && req.Phone == "" {
-		c.JSON(http.StatusBadRequest, NewErrorResponse(c, "either email or phone is required"))
-		return
-	}
-
-	user, verification, err := h.registration.RegisterUser(c.Request.Context(), req.Username, req.Email, req.Phone, req.Password)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			switch pgErr.ConstraintName {
-			case "users_email_key":
-				c.JSON(http.StatusConflict, NewErrorResponse(c, "email already registered"))
-			case "users_phone_key":
-				c.JSON(http.StatusConflict, NewErrorResponse(c, "phone already registered"))
-			default:
-				c.JSON(http.StatusConflict, NewErrorResponse(c, "username or contact already exists"))
-			}
-			return
-		}
-		if errors.Is(err, usecase.ErrPasswordPolicyViolation) {
-			c.JSON(http.StatusBadRequest, NewErrorResponse(c, "password does not meet requirements"))
-			return
-		}
-		c.JSON(http.StatusInternalServerError, NewErrorResponse(c, "failed to register user"))
-		return
-	}
-
-	user.PasswordHash = ""
-
-	resp := RegistrationResponse{
-		User:                 newUserSummary(user, nil),
-		RequiresVerification: user.Status == domain.UserStatusPending,
-	}
-
-	if user.Status == domain.UserStatusPending {
-		resp.Message = "verification required"
-		if verification.Delivery != "" {
-			delivery := verification.Delivery
-			resp.Delivery = &delivery
-		}
-		if !verification.ExpiresAt.IsZero() {
-			expires := verification.ExpiresAt.UTC().Format(time.RFC3339)
-			resp.ExpiresAt = &expires
-		}
-
-		if h.isDev {
-			if token := strings.TrimSpace(verification.Token); token != "" {
-				resp.DevToken = &token
-			}
-			if code := strings.TrimSpace(verification.Code); code != "" {
-				resp.DevCode = &code
-			}
-		}
-
-		h.dispatchVerification(c.Request.Context(), req.Username, req.Email, req.Phone, verification)
-	}
-
-	c.JSON(http.StatusCreated, resp)
-}
-
 // Refresh godoc
 // @Summary Refresh an access token
 // @Description Issues a new access token and refresh token pair using a valid refresh token.
@@ -197,6 +55,7 @@ func (h *AuthHandler) register(c *gin.Context) {
 // @Success 200 {object} TokenRefreshResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 401 {object} ErrorResponse
+// @Failure 401 {object} middleware.ProblemDetails "Refresh token stale"
 // @Failure 403 {object} ErrorResponse
 // @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
@@ -240,33 +99,6 @@ func (h *AuthHandler) logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h *AuthHandler) dispatchVerification(ctx context.Context, username, email, phone string, verification usecase.RegistrationVerification) {
-	if h.dispatcher == nil {
-		return
-	}
-
-	contact := strings.TrimSpace(email)
-	if contact == "" {
-		contact = strings.TrimSpace(phone)
-	}
-
-	payload := RegistrationNotification{
-		Delivery: verification.Delivery,
-		Contact:  contact,
-		Username: strings.TrimSpace(username),
-		Email:    strings.TrimSpace(email),
-		Phone:    strings.TrimSpace(phone),
-		Expires:  verification.ExpiresAt,
-	}
-
-	if h.isDev {
-		payload.DevToken = strings.TrimSpace(verification.Token)
-		payload.DevCode = strings.TrimSpace(verification.Code)
-	}
-
-	_ = h.dispatcher.SendRegistrationVerification(ctx, payload)
-}
-
 func handleTokenRefresh(c *gin.Context, auth *usecase.AuthService) {
 	if auth == nil {
 		c.JSON(http.StatusServiceUnavailable, NewErrorResponse(c, "refresh token service unavailable"))
@@ -281,22 +113,18 @@ func handleTokenRefresh(c *gin.Context, auth *usecase.AuthService) {
 
 	accessToken, newRefreshToken, user, roles, err := auth.RefreshAccessToken(c.Request.Context(), req.RefreshToken)
 	if err != nil {
-		switch {
-		case errors.Is(err, usecase.ErrInvalidRefreshToken):
-			c.JSON(http.StatusUnauthorized, NewErrorResponse(c, "invalid refresh token"))
-		case errors.Is(err, usecase.ErrExpiredRefreshToken):
-			c.JSON(http.StatusUnauthorized, NewErrorResponse(c, "refresh token expired"))
-		case errors.Is(err, usecase.ErrInactiveAccount):
-			c.JSON(http.StatusForbidden, NewErrorResponse(c, "account inactive"))
-		case errors.Is(err, usecase.ErrAccountPending):
-			c.JSON(http.StatusConflict, NewErrorResponse(c, "account pending verification"))
-		case errors.Is(err, usecase.ErrRefreshTokenUnavailable):
-			c.JSON(http.StatusServiceUnavailable, NewErrorResponse(c, "refresh tokens unavailable"))
-		case errors.Is(err, usecase.ErrRefreshTokenReplay):
-			c.JSON(http.StatusConflict, NewErrorResponse(c, "refresh token replay detected"))
-		default:
-			c.JSON(http.StatusInternalServerError, NewErrorResponse(c, "failed to refresh token"))
+		cases := []ErrorCase{
+			{Err: usecase.ErrInvalidRefreshToken, Status: http.StatusUnauthorized, Message: "invalid refresh token"},
+			{Err: usecase.ErrExpiredRefreshToken, Status: http.StatusUnauthorized, Message: "refresh token expired"},
+			{Err: usecase.ErrStaleRefreshToken, Status: http.StatusUnauthorized, Message: "refresh token stale", ProblemType: "iam/token-stale", ProblemTitle: "Refresh Token Stale", ProblemDetail: "refresh token is stale; re-authentication required"},
+			{Err: usecase.ErrInactiveAccount, Status: http.StatusForbidden, Message: "account inactive"},
+			{Err: usecase.ErrAccountPending, Status: http.StatusConflict, Message: "account pending verification"},
+			{Err: usecase.ErrRefreshTokenUnavailable, Status: http.StatusServiceUnavailable, Message: "refresh tokens unavailable"},
+			{Err: usecase.ErrRefreshTokenReplay, Status: http.StatusConflict, Message: "refresh token replay detected"},
+			{Err: usecase.ErrSessionRevoked, Status: http.StatusUnauthorized, Message: "session revoked"},
+			{Err: usecase.ErrSessionExpired, Status: http.StatusUnauthorized, Message: "session expired"},
 		}
+		RespondWithMappedError(c, err, cases, http.StatusInternalServerError, "failed to refresh token")
 		return
 	}
 
@@ -335,7 +163,7 @@ func computeExpiresIn(token string, auth *usecase.AuthService) int {
 	if auth == nil {
 		return 0
 	}
-	claims, err := auth.ParseAccessToken(token)
+	claims, err := auth.ParseAccessToken(context.Background(), token)
 	if err != nil || claims == nil || claims.ExpiresAt == nil {
 		return 0
 	}

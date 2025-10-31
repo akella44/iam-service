@@ -19,6 +19,10 @@ type fakeSessionRepository struct {
 	storeEventCalls []domain.SessionEvent
 	revokeCalls     []string
 	tokenCounts     map[string]int
+	versionCalls    []struct {
+		sessionID string
+		reason    string
+	}
 }
 
 func newFakeSessionRepository(sessions ...domain.Session) *fakeSessionRepository {
@@ -28,6 +32,9 @@ func newFakeSessionRepository(sessions ...domain.Session) *fakeSessionRepository
 	}
 	for i := range sessions {
 		sessionCopy := sessions[i]
+		if sessionCopy.Version <= 0 {
+			sessionCopy.Version = 1
+		}
 		repo.sessions[sessionCopy.ID] = &sessionCopy
 	}
 	return repo
@@ -141,6 +148,44 @@ func (f *fakeSessionRepository) RevokeSessionAccessTokens(ctx context.Context, s
 	return 0, nil
 }
 
+func (f *fakeSessionRepository) GetVersion(ctx context.Context, sessionID string) (int64, error) {
+	session, ok := f.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	return session.Version, nil
+}
+
+func (f *fakeSessionRepository) IncrementVersion(ctx context.Context, sessionID string, reason string) (int64, error) {
+	session, ok := f.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	if session.Version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version++
+	}
+	f.versionCalls = append(f.versionCalls, struct {
+		sessionID string
+		reason    string
+	}{sessionID: sessionID, reason: reason})
+	return session.Version, nil
+}
+
+func (f *fakeSessionRepository) SetVersion(ctx context.Context, sessionID string, version int64) error {
+	session, ok := f.sessions[sessionID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version = version
+	}
+	return nil
+}
+
 type fakeEventPublisher struct {
 	sessionRevoked []domain.SessionRevokedEvent
 	fail           error
@@ -186,6 +231,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 		{
 			ID:        "sess-active",
 			UserID:    "user-1",
+			Version:   1,
 			LastSeen:  base.Add(-5 * time.Minute),
 			CreatedAt: base.Add(-2 * time.Hour),
 			ExpiresAt: base.Add(2 * time.Hour),
@@ -193,6 +239,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 		{
 			ID:          "sess-revoked",
 			UserID:      "user-1",
+			Version:     1,
 			LastSeen:    base.Add(-10 * time.Minute),
 			CreatedAt:   base.Add(-3 * time.Hour),
 			ExpiresAt:   base.Add(3 * time.Hour),
@@ -202,6 +249,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 		{
 			ID:        "sess-expired",
 			UserID:    "user-1",
+			Version:   1,
 			LastSeen:  base.Add(-1 * time.Hour),
 			CreatedAt: base.Add(-4 * time.Hour),
 			ExpiresAt: expiredAt,
@@ -211,6 +259,8 @@ func TestSessionService_ListSessions(t *testing.T) {
 	repo := newFakeSessionRepository(sessions...)
 	svc := NewSessionService(repo, nil, nil, nil)
 	svc.WithClock(func() time.Time { return base })
+	cache := &stubSessionVersionCache{values: map[string]int64{"sess-active": 5}}
+	svc.WithSessionVersionCache(cache, time.Minute)
 
 	ctx := context.Background()
 
@@ -224,6 +274,18 @@ func TestSessionService_ListSessions(t *testing.T) {
 	if allSessions[0].LastSeen.Before(allSessions[1].LastSeen) {
 		t.Fatalf("expected sessions ordered by last seen descending")
 	}
+	var foundVersion bool
+	for _, session := range allSessions {
+		if session.ID == "sess-active" {
+			if session.Version != 5 {
+				t.Fatalf("expected cached session version 5, got %d", session.Version)
+			}
+			foundVersion = true
+		}
+	}
+	if !foundVersion {
+		t.Fatalf("sess-active not found in results: %+v", allSessions)
+	}
 
 	activeOnly, err := svc.ListSessions(ctx, "user-1", true)
 	if err != nil {
@@ -234,6 +296,9 @@ func TestSessionService_ListSessions(t *testing.T) {
 	}
 	if activeOnly[0].ID != "sess-active" {
 		t.Fatalf("expected sess-active to remain, got %s", activeOnly[0].ID)
+	}
+	if activeOnly[0].Version != 5 {
+		t.Fatalf("expected active session to expose cached version 5, got %d", activeOnly[0].Version)
 	}
 
 	if _, err := svc.ListSessions(ctx, "", false); err == nil {

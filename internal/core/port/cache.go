@@ -19,3 +19,10 @@ type Cache interface {
 	ZAdd(ctx context.Context, key string, members ...CacheZMember) error
 	ZRangeByScore(ctx context.Context, key string, min, max string, limit int64) ([]CacheZMember, error)
 }
+
+// SessionVersionCache provides optimized accessors for session version counters.
+type SessionVersionCache interface {
+	GetSessionVersion(ctx context.Context, sessionID string) (int64, error)
+	SetSessionVersion(ctx context.Context, sessionID string, version int64, ttl time.Duration) error
+	DeleteSessionVersion(ctx context.Context, sessionID string) error
+}

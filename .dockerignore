@@ -2,6 +2,7 @@
 build/compose/postgres-data
 build/compose/.env
 build/compose/*.log
+build/compose/secrets/
 
 # Git and editor files
 .git

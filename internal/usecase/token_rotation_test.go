@@ -81,6 +81,10 @@ type refreshSessionRepository struct {
 	revokedFamilies []string
 	revokeReasons   []string
 	storeEventCalls []domain.SessionEvent
+	versionCalls    []struct {
+		sessionID string
+		reason    string
+	}
 }
 
 func (r *refreshSessionRepository) Create(context.Context, domain.Session) error {
@@ -121,6 +125,46 @@ func (r *refreshSessionRepository) StoreEvent(_ context.Context, event domain.Se
 }
 func (r *refreshSessionRepository) RevokeSessionAccessTokens(context.Context, string, string) (int, error) {
 	return 0, errors.New("unexpected call: RevokeSessionAccessTokens")
+}
+
+func (r *refreshSessionRepository) GetVersion(_ context.Context, sessionID string) (int64, error) {
+	session, ok := r.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	return session.Version, nil
+}
+
+func (r *refreshSessionRepository) IncrementVersion(_ context.Context, sessionID string, reason string) (int64, error) {
+	session, ok := r.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	if session.Version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version++
+	}
+	r.versionCalls = append(r.versionCalls, struct {
+		sessionID string
+		reason    string
+	}{sessionID: sessionID, reason: reason})
+	r.sessions[sessionID] = session
+	return session.Version, nil
+}
+
+func (r *refreshSessionRepository) SetVersion(_ context.Context, sessionID string, version int64) error {
+	session, ok := r.sessions[sessionID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version = version
+	}
+	r.sessions[sessionID] = session
+	return nil
 }
 
 //
@@ -215,6 +259,10 @@ func (r *refreshTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) 
 	return 0, nil
 }
 
+func (r *refreshTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
+	return nil
+}
+
 func pointerToTime(t time.Time) *time.Time {
 	return &t
 }
@@ -235,22 +283,24 @@ func TestAuthService_RefreshAccessToken_RotatesWithinFamily(t *testing.T) {
 	hash := security.HashToken(rawRefresh)
 	expiresAt := time.Now().Add(time.Hour)
 
-	session := domain.Session{ID: sessionID, UserID: user.ID, ExpiresAt: expiresAt.Add(time.Hour)}
+	session := domain.Session{ID: sessionID, UserID: user.ID, Version: 1, ExpiresAt: expiresAt.Add(time.Hour)}
 	sessionRepo := &refreshSessionRepository{sessions: map[string]domain.Session{sessionID: session}}
 
 	tokenRecord := domain.RefreshToken{
-		ID:        "token-1",
-		UserID:    user.ID,
-		SessionID: &sessionID,
-		TokenHash: hash,
-		FamilyID:  familyID,
-		CreatedAt: time.Now().Add(-time.Minute),
-		ExpiresAt: expiresAt,
-		IP:        stringPtr("192.0.2.50"),
-		UserAgent: stringPtr("GoTest/1.0"),
+		ID:            "token-1",
+		UserID:        user.ID,
+		SessionID:     &sessionID,
+		TokenHash:     hash,
+		FamilyID:      familyID,
+		IssuedVersion: 1,
+		CreatedAt:     time.Now().Add(-time.Minute),
+		ExpiresAt:     expiresAt,
+		IP:            stringPtr("192.0.2.50"),
+		UserAgent:     stringPtr("GoTest/1.0"),
 	}
 
 	tokenRepo := &refreshTokenRepository{records: map[string]domain.RefreshToken{hash: tokenRecord}}
+	cache := &stubSessionVersionCache{}
 
 	cfg := &config.AppConfig{
 		App: config.AppSettings{Name: "iam-service", Env: "test"},
@@ -261,6 +311,7 @@ func TestAuthService_RefreshAccessToken_RotatesWithinFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
+	authService.WithSessionVersionCache(cache, time.Minute)
 
 	accessToken, newRefresh, refreshedUser, roles, err := authService.RefreshAccessToken(context.Background(), rawRefresh)
 	if err != nil {
@@ -302,6 +353,20 @@ func TestAuthService_RefreshAccessToken_RotatesWithinFamily(t *testing.T) {
 	if sessionRepo.updateLastSeenCalls[0].sessionID != sessionID {
 		t.Fatalf("expected UpdateLastSeen to target session %s", sessionID)
 	}
+	if len(sessionRepo.versionCalls) != 1 {
+		t.Fatalf("expected session version to be bumped once")
+	}
+	bump := sessionRepo.versionCalls[0]
+	if bump.sessionID != sessionID {
+		t.Fatalf("expected version bump for session %s", sessionID)
+	}
+	if bump.reason != "refresh_rotation" {
+		t.Fatalf("expected version bump reason refresh_rotation, got %s", bump.reason)
+	}
+	updatedSession := sessionRepo.sessions[sessionID]
+	if updatedSession.Version != 2 {
+		t.Fatalf("expected session version to increment to 2, got %d", updatedSession.Version)
+	}
 
 	claims := &security.AccessTokenClaims{}
 	parsed, err := jwt.ParseWithClaims(accessToken, claims, func(t *jwt.Token) (interface{}, error) {
@@ -312,6 +377,22 @@ func TestAuthService_RefreshAccessToken_RotatesWithinFamily(t *testing.T) {
 	}
 	if claims.SessionID != sessionID {
 		t.Fatalf("expected claims session id to remain %s, got %s", sessionID, claims.SessionID)
+	}
+	if claims.SessionVersion != 2 {
+		t.Fatalf("expected claims session version 2, got %d", claims.SessionVersion)
+	}
+	if len(tokenRepo.createdTokens) == 0 || tokenRepo.createdTokens[0].IssuedVersion != 2 {
+		t.Fatalf("expected new refresh token issued version 2, got %+v", tokenRepo.createdTokens)
+	}
+	foundCache := false
+	for _, call := range cache.setCalls {
+		if call.sessionID == sessionID && call.version == 2 {
+			foundCache = true
+			break
+		}
+	}
+	if !foundCache {
+		t.Fatalf("expected session version cache to record bumped version for session %s", sessionID)
 	}
 }
 
@@ -331,17 +412,18 @@ func TestAuthService_RefreshAccessToken_DetectsReplayAndRevokesFamily(t *testing
 	hash := security.HashToken(rawRefresh)
 	usedTime := time.Now().Add(-time.Minute)
 
-	sessionRepo := &refreshSessionRepository{sessions: map[string]domain.Session{sessionID: {ID: sessionID, UserID: user.ID, ExpiresAt: time.Now().Add(time.Hour)}}}
+	sessionRepo := &refreshSessionRepository{sessions: map[string]domain.Session{sessionID: {ID: sessionID, UserID: user.ID, Version: 1, ExpiresAt: time.Now().Add(time.Hour)}}}
 
 	tokenRepo := &refreshTokenRepository{records: map[string]domain.RefreshToken{hash: {
-		ID:        "token-used",
-		UserID:    user.ID,
-		SessionID: &sessionID,
-		TokenHash: hash,
-		FamilyID:  familyID,
-		CreatedAt: time.Now().Add(-2 * time.Hour),
-		ExpiresAt: time.Now().Add(time.Hour),
-		UsedAt:    &usedTime,
+		ID:            "token-used",
+		UserID:        user.ID,
+		SessionID:     &sessionID,
+		TokenHash:     hash,
+		FamilyID:      familyID,
+		IssuedVersion: 1,
+		CreatedAt:     time.Now().Add(-2 * time.Hour),
+		ExpiresAt:     time.Now().Add(time.Hour),
+		UsedAt:        &usedTime,
 	}}}
 
 	cfg := &config.AppConfig{
@@ -363,5 +445,74 @@ func TestAuthService_RefreshAccessToken_DetectsReplayAndRevokesFamily(t *testing
 	}
 	if len(tokenRepo.revokedFamilies) != 1 || tokenRepo.revokedFamilies[0] != familyID {
 		t.Fatalf("expected refresh token family %s to be revoked", familyID)
+	}
+}
+
+func TestAuthService_RefreshAccessToken_DetectsStaleVersion(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("token generator: %v", err)
+	}
+
+	user := domain.User{ID: "user-stale", Username: "stale", Email: "stale@example.com", Status: domain.UserStatusActive, IsActive: true, PasswordHash: "hashed"}
+	userRepo := &refreshUserRepository{users: map[string]domain.User{user.ID: user}}
+
+	familyID := "family-stale"
+	sessionID := "session-stale"
+	rawRefresh := "stale-refresh-token"
+	hash := security.HashToken(rawRefresh)
+
+	session := domain.Session{ID: sessionID, UserID: user.ID, Version: 5, ExpiresAt: time.Now().Add(time.Hour)}
+	sessionRepo := &refreshSessionRepository{sessions: map[string]domain.Session{sessionID: session}}
+
+	issuedAt := time.Now().Add(-time.Minute)
+	tokenRecord := domain.RefreshToken{
+		ID:            "token-stale",
+		UserID:        user.ID,
+		SessionID:     &sessionID,
+		TokenHash:     hash,
+		FamilyID:      familyID,
+		IssuedVersion: 2,
+		CreatedAt:     issuedAt,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}
+
+	tokenRepo := &refreshTokenRepository{records: map[string]domain.RefreshToken{hash: tokenRecord}}
+	cache := &stubSessionVersionCache{}
+
+	cfg := &config.AppConfig{
+		App: config.AppSettings{Name: "iam-service", Env: "test"},
+		JWT: config.JWTSettings{KeyDirectory: keyDir, AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour},
+	}
+
+	authService, err := NewAuthService(cfg, userRepo, nil, nil, sessionRepo, tokenRepo, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService: %v", err)
+	}
+	authService.WithSessionVersionCache(cache, time.Minute)
+
+	_, _, _, _, err = authService.RefreshAccessToken(context.Background(), rawRefresh)
+	if !errors.Is(err, ErrStaleRefreshToken) {
+		t.Fatalf("expected ErrStaleRefreshToken, got %v", err)
+	}
+	if len(tokenRepo.markedUsed) != 0 {
+		t.Fatalf("expected stale token to short-circuit before marking used")
+	}
+	if len(tokenRepo.revokedIDs) != 0 {
+		t.Fatalf("expected stale token to short-circuit before revocation")
+	}
+	if len(sessionRepo.versionCalls) != 0 {
+		t.Fatalf("expected no session version bumps when stale detected")
+	}
+	foundCache := false
+	for _, call := range cache.setCalls {
+		if call.sessionID == sessionID && call.version == session.Version {
+			foundCache = true
+			break
+		}
+	}
+	if !foundCache {
+		t.Fatalf("expected session version to be cached even on stale detection")
 	}
 }

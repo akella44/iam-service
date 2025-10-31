@@ -7,7 +7,9 @@ type Session struct {
 	ID             string
 	FamilyID       string
 	UserID         string
+	Version        int64
 	RefreshTokenID *string
+	IssuedVersion  *int64
 	DeviceID       *string
 	DeviceLabel    *string
 	IPFirst        *string
@@ -54,6 +56,16 @@ func (s *Session) Revoke(at time.Time, reason string) bool {
 	s.RevokedAt = &at
 	s.RevokeReason = &reason
 	return true
+}
+
+// IncrementVersion bumps the in-memory session version counter and returns the new value.
+func (s *Session) IncrementVersion() int64 {
+	if s.Version < 0 {
+		s.Version = 1
+		return s.Version
+	}
+	s.Version++
+	return s.Version
 }
 
 // SessionEvent captures lifecycle changes for sessions.

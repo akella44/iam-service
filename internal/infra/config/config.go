@@ -48,11 +48,13 @@ type PostgresSettings struct {
 
 // RedisSettings configures Redis connection and TLS
 type RedisSettings struct {
-	Host       string `mapstructure:"host"`
-	Port       int    `mapstructure:"port"`
-	DB         int    `mapstructure:"db"`
-	Password   string `mapstructure:"password"`
-	TLSEnabled bool   `mapstructure:"tls_enabled"`
+	Host                 string        `mapstructure:"host"`
+	Port                 int           `mapstructure:"port"`
+	DB                   int           `mapstructure:"db"`
+	Password             string        `mapstructure:"password"`
+	TLSEnabled           bool          `mapstructure:"tls_enabled"`
+	SessionVersionPrefix string        `mapstructure:"session_version_prefix"`
+	SessionVersionTTL    time.Duration `mapstructure:"session_version_ttl"`
 }
 
 // KafkaSettings configures Kafka producer
@@ -125,6 +127,8 @@ func Load() (*AppConfig, error) {
 		"redis.db",
 		"redis.password",
 		"redis.tls_enabled",
+		"redis.session_version_prefix",
+		"redis.session_version_ttl",
 		"kafka.brokers",
 		"kafka.topic_prefix",
 		"kafka.async",
@@ -187,6 +191,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.db", 0)
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.tls_enabled", false)
+	v.SetDefault("redis.session_version_prefix", "iam:session_version")
+	v.SetDefault("redis.session_version_ttl", "10m")
 
 	// Kafka defaults (T007)
 	v.SetDefault("kafka.brokers", []string{"localhost:9092"})

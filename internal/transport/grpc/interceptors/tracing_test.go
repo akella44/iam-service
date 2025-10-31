@@ -15,7 +15,7 @@ func TestTracingInterceptorUnaryDelegatesToHandler(t *testing.T) {
 	tp := sdktrace.NewTracerProvider()
 	interceptor := NewTracingInterceptor(TracingOptions{TracerProvider: tp}).Unary()
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/ValidateToken"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/iam.v1.TokenService/GetJWKS"}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return "ok", nil
 	}

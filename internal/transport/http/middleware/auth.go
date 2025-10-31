@@ -53,7 +53,7 @@ func RequireAuth(authService *usecase.AuthService) gin.HandlerFunc {
 			return
 		}
 
-		claims, err := authService.ParseAccessToken(token)
+		claims, err := authService.ParseAccessToken(c.Request.Context(), token)
 		if err != nil {
 			switch {
 			case errors.Is(err, usecase.ErrExpiredAccessToken):

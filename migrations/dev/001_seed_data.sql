@@ -161,19 +161,21 @@ WITH admin_user AS (
    WHERE username = 'admin'
 )
 INSERT INTO sessions (
-    id,
-    user_id,
-    device_id,
-    device_label,
-    ip_first,
-    ip_last,
-    user_agent,
-    created_at,
-    last_seen,
-    expires_at
+  id,
+  user_id,
+  session_version,
+  device_id,
+  device_label,
+  ip_first,
+  ip_last,
+  user_agent,
+  created_at,
+  last_seen,
+  expires_at
 )
 SELECT '44444444-4444-4444-4444-444444444444',
        u.id,
+     1,
        'dev-laptop',
        'Dev Laptop',
        '192.0.2.10',
@@ -188,20 +190,22 @@ SET device_label = EXCLUDED.device_label,
     ip_last = EXCLUDED.ip_last,
     user_agent = EXCLUDED.user_agent,
     last_seen = EXCLUDED.last_seen,
-    expires_at = EXCLUDED.expires_at;
+    expires_at = EXCLUDED.expires_at,
+    session_version = EXCLUDED.session_version;
 
 -- Issue refresh token bound to the seeded session
 INSERT INTO refresh_tokens (
-    id,
-    user_id,
-    token_hash,
-    client_id,
-    ip,
-    user_agent,
-    created_at,
-    expires_at,
-    session_id,
-    family_id
+  id,
+  user_id,
+  token_hash,
+  client_id,
+  ip,
+  user_agent,
+  created_at,
+  expires_at,
+  session_id,
+  family_id,
+  issued_version
 )
 SELECT '55555555-5555-5555-5555-555555555555',
        s.user_id,
@@ -212,13 +216,15 @@ SELECT '55555555-5555-5555-5555-555555555555',
        now() - interval '15 minutes',
        now() + interval '30 days',
        s.id,
-       s.family_id
+    s.family_id,
+     1
   FROM sessions s
  WHERE s.id = '44444444-4444-4444-4444-444444444444'
 ON CONFLICT (token_hash) DO UPDATE
 SET expires_at = EXCLUDED.expires_at,
-    session_id = EXCLUDED.session_id,
-    family_id = COALESCE(refresh_tokens.family_id, EXCLUDED.family_id);
+  session_id = EXCLUDED.session_id,
+  family_id = COALESCE(refresh_tokens.family_id, EXCLUDED.family_id),
+  issued_version = EXCLUDED.issued_version;
 
 UPDATE sessions
    SET refresh_token_id = rt.id

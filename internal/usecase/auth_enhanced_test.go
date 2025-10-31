@@ -169,6 +169,18 @@ func (r *loginSessionRepository) RevokeSessionAccessTokens(context.Context, stri
 	return 0, errors.New("unexpected call: RevokeSessionAccessTokens")
 }
 
+func (r *loginSessionRepository) GetVersion(context.Context, string) (int64, error) {
+	return 1, nil
+}
+
+func (r *loginSessionRepository) IncrementVersion(context.Context, string, string) (int64, error) {
+	return 1, nil
+}
+
+func (r *loginSessionRepository) SetVersion(context.Context, string, int64) error {
+	return nil
+}
+
 //
 
 type loginTokenRepository struct {
@@ -227,6 +239,10 @@ func (r *loginTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (i
 	return 0, nil
 }
 
+func (r *loginTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
+	return nil
+}
+
 //
 
 type noopRateLimitStore struct {
@@ -274,6 +290,7 @@ func TestAuthService_Login_CreatesSessionWithMetadata(t *testing.T) {
 	sessionRepo := &loginSessionRepository{}
 	tokenRepo := &loginTokenRepository{}
 	rateLimiter := &noopRateLimitStore{}
+	cache := &stubSessionVersionCache{}
 
 	keyProvider, keyDir := createTestKeyProvider(t)
 	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
@@ -291,6 +308,7 @@ func TestAuthService_Login_CreatesSessionWithMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuthService: %v", err)
 	}
+	authService.WithSessionVersionCache(cache, time.Minute)
 
 	input := LoginInput{
 		Identifier:  "login@example.com",
@@ -327,6 +345,9 @@ func TestAuthService_Login_CreatesSessionWithMetadata(t *testing.T) {
 		t.Fatalf("expected user agent to be stored")
 	}
 
+	if storedSession.Version != 1 {
+		t.Fatalf("expected session version to initialize at 1")
+	}
 	if len(sessionRepo.storedEvents) != 1 {
 		t.Fatalf("expected a session event to be recorded")
 	}
@@ -350,13 +371,22 @@ func TestAuthService_Login_CreatesSessionWithMetadata(t *testing.T) {
 	if result.Session.RefreshTokenID == nil || *result.Session.RefreshTokenID == "" {
 		t.Fatalf("expected session to link to refresh token id")
 	}
+	if tokenRepo.lastRefresh.IssuedVersion != 1 {
+		t.Fatalf("expected refresh token issued version to match session version")
+	}
+	if result.Session.Version != 1 {
+		t.Fatalf("expected response session version to be 1")
+	}
 
-	claims, err := authService.ParseAccessToken(result.AccessToken)
+	claims, err := authService.ParseAccessToken(context.Background(), result.AccessToken)
 	if err != nil {
 		t.Fatalf("ParseAccessToken returned error: %v", err)
 	}
 	if claims.SessionID != storedSession.ID {
 		t.Fatalf("expected claims session id %s, got %s", storedSession.ID, claims.SessionID)
+	}
+	if claims.SessionVersion != 1 {
+		t.Fatalf("expected claims session version 1, got %d", claims.SessionVersion)
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "admin" {
 		t.Fatalf("expected roles to include admin, got %+v", claims.Roles)
@@ -368,5 +398,15 @@ func TestAuthService_Login_CreatesSessionWithMetadata(t *testing.T) {
 
 	if rateLimiter.recordCalls != 2 {
 		t.Fatalf("expected record attempts for both ip and identifier, got %d", rateLimiter.recordCalls)
+	}
+	foundCacheEntry := false
+	for _, call := range cache.setCalls {
+		if call.sessionID == storedSession.ID && call.version == 1 {
+			foundCacheEntry = true
+			break
+		}
+	}
+	if !foundCacheEntry {
+		t.Fatalf("expected session version cache to be populated for session %s", storedSession.ID)
 	}
 }

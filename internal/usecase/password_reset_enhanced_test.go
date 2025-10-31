@@ -156,6 +156,45 @@ func (m *passwordResetSessionRepoMock) RevokeSessionAccessTokens(_ context.Conte
 	return m.tokenCounts[sessionID], nil
 }
 
+func (m *passwordResetSessionRepoMock) GetVersion(_ context.Context, sessionID string) (int64, error) {
+	session, ok := m.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	if session.Version <= 0 {
+		return 1, nil
+	}
+	return session.Version, nil
+}
+
+func (m *passwordResetSessionRepoMock) IncrementVersion(_ context.Context, sessionID, _ string) (int64, error) {
+	session, ok := m.sessions[sessionID]
+	if !ok {
+		return 0, repository.ErrNotFound
+	}
+	if session.Version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version++
+	}
+	m.sessions[sessionID] = session
+	return session.Version, nil
+}
+
+func (m *passwordResetSessionRepoMock) SetVersion(_ context.Context, sessionID string, version int64) error {
+	session, ok := m.sessions[sessionID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if version <= 0 {
+		session.Version = 1
+	} else {
+		session.Version = version
+	}
+	m.sessions[sessionID] = session
+	return nil
+}
+
 type passwordResetEventPublisherMock struct {
 	passwordChanged        []domain.PasswordChangedEvent
 	passwordResetRequested []domain.PasswordResetRequestedEvent

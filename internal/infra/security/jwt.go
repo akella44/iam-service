@@ -138,24 +138,26 @@ func buildJWK(kid string, key *rsa.PublicKey) map[string]string {
 
 // AccessTokenClaims augments registered claims with RBAC and session context.
 type AccessTokenClaims struct {
-	Roles     []string `json:"roles,omitempty"`
-	UserID    string   `json:"uid"`
-	SessionID string   `json:"sid,omitempty"`
+	Roles          []string `json:"roles,omitempty"`
+	UserID         string   `json:"uid"`
+	SessionID      string   `json:"sid,omitempty"`
+	SessionVersion int64    `json:"sv,omitempty"`
 	jwt.RegisteredClaims
 }
 
 // AccessTokenOptions configures creation of access token claims.
 type AccessTokenOptions struct {
-	UserID    string
-	SessionID string
-	Roles     []string
-	Issuer    string
-	Audience  []string
-	Subject   string
-	TTL       time.Duration
-	IssuedAt  time.Time
-	NotBefore time.Time
-	JTI       string
+	UserID         string
+	SessionID      string
+	SessionVersion int64
+	Roles          []string
+	Issuer         string
+	Audience       []string
+	Subject        string
+	TTL            time.Duration
+	IssuedAt       time.Time
+	NotBefore      time.Time
+	JTI            string
 }
 
 const defaultAccessTokenTTL = 15 * time.Minute
@@ -197,10 +199,12 @@ func NewAccessTokenClaims(opts AccessTokenOptions) (*AccessTokenClaims, error) {
 
 	roles := normalizeRoles(opts.Roles)
 	sessionID := strings.TrimSpace(opts.SessionID)
+	sessionVersion := opts.SessionVersion
 	claims := &AccessTokenClaims{
-		Roles:     roles,
-		UserID:    userID,
-		SessionID: sessionID,
+		Roles:          roles,
+		UserID:         userID,
+		SessionID:      sessionID,
+		SessionVersion: sessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   strings.TrimSpace(opts.Subject),
 			Issuer:    issuer,
