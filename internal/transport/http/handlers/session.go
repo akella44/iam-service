@@ -232,7 +232,6 @@ func (h *SessionHandler) RevokeAllSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, SessionBulkRevokeResponse{
 		RevokedCount:  count,
 		TokensRevoked: tokens,
-		Message:       "Все сессии завершены",
 	})
 }
 
@@ -279,6 +278,5 @@ func (h *SessionHandler) RevokeOtherSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, SessionBulkRevokeResponse{
 		RevokedCount:  count,
 		TokensRevoked: tokens,
-		Message:       "Другие сессии завершены",
 	})
 }

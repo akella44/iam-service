@@ -33,16 +33,17 @@ func NewEventPublisher(producer *Producer, appCfg config.AppSettings, logger *za
 type envelopeMetadata map[string]string
 
 type eventEnvelope struct {
-	EventID   string           `json:"event_id"`
-	EventType string           `json:"event_type"`
-	UserID    string           `json:"user_id,omitempty"`
-	Timestamp time.Time        `json:"timestamp"`
-	Version   string           `json:"version"`
-	Payload   any              `json:"payload"`
-	Metadata  envelopeMetadata `json:"metadata,omitempty"`
+	EventID     string           `json:"event_id"`
+	EventType   string           `json:"event_type"`
+	AggregateID string           `json:"aggregate_id,omitempty"`
+	UserID      string           `json:"user_id,omitempty"`
+	Timestamp   time.Time        `json:"timestamp"`
+	Version     string           `json:"version"`
+	Payload     any              `json:"payload"`
+	Metadata    envelopeMetadata `json:"metadata,omitempty"`
 }
 
-func (p *EventPublisher) publish(ctx context.Context, eventID, eventType, userID string, ts time.Time, payload any) error {
+func (p *EventPublisher) publish(ctx context.Context, eventID, eventType, aggregateID, userID string, ts time.Time, payload any) error {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
@@ -64,13 +65,14 @@ func (p *EventPublisher) publish(ctx context.Context, eventID, eventType, userID
 	}
 
 	envelope := eventEnvelope{
-		EventID:   id,
-		EventType: eventType,
-		UserID:    userID,
-		Timestamp: ts.UTC(),
-		Version:   schemaVersion,
-		Payload:   payload,
-		Metadata:  metadata,
+		EventID:     id,
+		EventType:   eventType,
+		AggregateID: aggregateID,
+		UserID:      userID,
+		Timestamp:   ts.UTC(),
+		Version:     schemaVersion,
+		Payload:     payload,
+		Metadata:    metadata,
 	}
 
 	bytes, err := json.Marshal(envelope)
@@ -113,7 +115,7 @@ func (p *EventPublisher) PublishUserRegistered(ctx context.Context, event domain
 		Metadata:           event.Metadata,
 	}
 
-	return p.publish(ctx, event.EventID, "iam.user.registered", event.UserID, event.RegisteredAt, payload)
+	return p.publish(ctx, event.EventID, "iam.user.registered", event.UserID, event.UserID, event.RegisteredAt, payload)
 }
 
 // PublishPasswordChanged publishes iam.user.password.changed events.
@@ -134,7 +136,7 @@ func (p *EventPublisher) PublishPasswordChanged(ctx context.Context, event domai
 		Metadata:         event.Metadata,
 	}
 
-	return p.publish(ctx, event.EventID, "iam.user.password.changed", event.UserID, event.ChangedAt, payload)
+	return p.publish(ctx, event.EventID, "iam.user.password.changed", event.UserID, event.UserID, event.ChangedAt, payload)
 }
 
 // PublishPasswordResetRequested publishes iam.user.password.reset_requested events.
@@ -166,7 +168,7 @@ func (p *EventPublisher) PublishPasswordResetRequested(ctx context.Context, even
 		timestamp = event.ExpiresAt
 	}
 
-	return p.publish(ctx, event.EventID, "iam.user.password.reset_requested", event.UserID, timestamp, payload)
+	return p.publish(ctx, event.EventID, "iam.user.password.reset_requested", event.UserID, event.UserID, timestamp, payload)
 }
 
 // PublishRolesAssigned publishes iam.user.roles.assigned events.
@@ -194,7 +196,7 @@ func (p *EventPublisher) PublishRolesAssigned(ctx context.Context, event domain.
 		Metadata:   event.Metadata,
 	}
 
-	return p.publish(ctx, event.EventID, "iam.user.roles.assigned", event.UserID, event.AssignedAt, payload)
+	return p.publish(ctx, event.EventID, "iam.user.roles.assigned", event.UserID, event.UserID, event.AssignedAt, payload)
 }
 
 // PublishRolesRevoked publishes iam.user.roles.revoked events.
@@ -224,7 +226,7 @@ func (p *EventPublisher) PublishRolesRevoked(ctx context.Context, event domain.R
 		Metadata:     event.Metadata,
 	}
 
-	return p.publish(ctx, event.EventID, "iam.user.roles.revoked", event.UserID, event.RevokedAt, payload)
+	return p.publish(ctx, event.EventID, "iam.user.roles.revoked", event.UserID, event.UserID, event.RevokedAt, payload)
 }
 
 // PublishSessionRevoked publishes iam.session.revoked events.
@@ -251,7 +253,55 @@ func (p *EventPublisher) PublishSessionRevoked(ctx context.Context, event domain
 		Metadata:      event.Metadata,
 	}
 
-	return p.publish(ctx, event.EventID, "iam.session.revoked", event.UserID, event.RevokedAt, payload)
+	return p.publish(ctx, event.EventID, "iam.session.revoked", event.SessionID, event.UserID, event.RevokedAt, payload)
+}
+
+// PublishSessionVersionBumped publishes iam.session.version.bumped events.
+func (p *EventPublisher) PublishSessionVersionBumped(ctx context.Context, event domain.SessionVersionBumpedEvent) error {
+	payload := struct {
+		SessionID string         `json:"session_id"`
+		UserID    string         `json:"user_id"`
+		Version   int64          `json:"version"`
+		Reason    string         `json:"reason"`
+		BumpedAt  time.Time      `json:"bumped_at"`
+		Metadata  map[string]any `json:"metadata,omitempty"`
+	}{
+		SessionID: event.SessionID,
+		UserID:    event.UserID,
+		Version:   event.Version,
+		Reason:    event.Reason,
+		BumpedAt:  event.BumpedAt.UTC(),
+		Metadata:  event.Metadata,
+	}
+
+	return p.publish(ctx, event.EventID, "iam.session.version.bumped", event.SessionID, event.UserID, event.BumpedAt, payload)
+}
+
+// PublishSubjectVersionBumped publishes iam.subject.version.bumped events.
+func (p *EventPublisher) PublishSubjectVersionBumped(ctx context.Context, event domain.SubjectVersionBumpedEvent) error {
+	payload := struct {
+		SubjectID         string         `json:"subject_id"`
+		PreviousVersion   *int64         `json:"previous_version,omitempty"`
+		NewVersion        int64          `json:"new_version"`
+		PreviousNotBefore *time.Time     `json:"previous_not_before,omitempty"`
+		NewNotBefore      *time.Time     `json:"new_not_before,omitempty"`
+		Actor             string         `json:"actor"`
+		Reason            string         `json:"reason,omitempty"`
+		BumpedAt          time.Time      `json:"bumped_at"`
+		Metadata          map[string]any `json:"metadata,omitempty"`
+	}{
+		SubjectID:         event.SubjectID,
+		PreviousVersion:   event.PreviousVersion,
+		NewVersion:        event.NewVersion,
+		PreviousNotBefore: event.PreviousNotBefore,
+		NewNotBefore:      event.NewNotBefore,
+		Actor:             event.Actor,
+		Reason:            event.Reason,
+		BumpedAt:          event.BumpedAt.UTC(),
+		Metadata:          event.Metadata,
+	}
+
+	return p.publish(ctx, event.EventID, "iam.subject.version.bumped", event.SubjectID, "", event.BumpedAt, payload)
 }
 
 var _ port.EventPublisher = (*EventPublisher)(nil)

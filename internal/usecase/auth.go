@@ -47,6 +47,26 @@ var (
 	ErrRefreshTokenReplay = errors.New("refresh token replay detected")
 )
 
+// SessionVersionMismatchError conveys details about a stale refresh token where the session version has advanced.
+type SessionVersionMismatchError struct {
+	SessionID      string
+	TokenVersion   int64
+	CurrentVersion int64
+}
+
+// Error satisfies the error interface.
+func (e *SessionVersionMismatchError) Error() string {
+	if e == nil {
+		return ErrStaleRefreshToken.Error()
+	}
+	return fmt.Sprintf("%s (session_id=%s token_version=%d current_version=%d)", ErrStaleRefreshToken.Error(), strings.TrimSpace(e.SessionID), e.TokenVersion, e.CurrentVersion)
+}
+
+// Unwrap exposes the sentinel ErrStaleRefreshToken for errors.Is/As comparisons.
+func (e *SessionVersionMismatchError) Unwrap() error {
+	return ErrStaleRefreshToken
+}
+
 const (
 	rateLimitScopeIP      = "login:ip"
 	rateLimitScopeAccount = "login:account"
@@ -150,6 +170,7 @@ type AuthService struct {
 	logger            *zap.Logger
 	now               func() time.Time
 	sessionManager    *SessionService
+	degradationPolicy domain.DegradationPolicy
 }
 
 // NewAuthService constructs an AuthService instance.
@@ -170,20 +191,23 @@ func NewAuthService(
 	}
 
 	service := &AuthService{
-		cfg:            cfg,
-		users:          users,
-		roles:          roles,
-		permissions:    permissions,
-		sessions:       sessions,
-		tokens:         tokens,
-		tokenGenerator: tokenGenerator,
-		keyProvider:    keyProvider,
-		rateLimits:     rateLimits,
-		logger:         logger,
+		cfg:               cfg,
+		users:             users,
+		roles:             roles,
+		permissions:       permissions,
+		sessions:          sessions,
+		tokens:            tokens,
+		tokenGenerator:    tokenGenerator,
+		keyProvider:       keyProvider,
+		rateLimits:        rateLimits,
+		logger:            logger,
+		degradationPolicy: domain.NewDegradationPolicy(domain.DegradationPolicyModeLenient),
 	}
 	service.now = func() time.Time { return time.Now().UTC() }
 	if cfg != nil {
 		service.sessionVersionTTL = cfg.Redis.SessionVersionTTL
+		policyMode := domain.ParseDegradationPolicyMode(cfg.Revocation.DegradationPolicy)
+		service.degradationPolicy = domain.NewDegradationPolicy(policyMode)
 	}
 	if service.sessionVersionTTL <= 0 {
 		service.sessionVersionTTL = 10 * time.Minute
@@ -414,7 +438,14 @@ func (s *AuthService) validateSessionBinding(ctx context.Context, claims *securi
 	}
 
 	if s.sessions == nil {
-		s.logger.Warn("session repository missing for session-bound token", zap.String("session_id", sessionID))
+		s.logger.Warn(
+			"session repository missing for session-bound token",
+			zap.String("session_id", sessionID),
+			zap.String("degradation_policy", string(s.degradationPolicy.Mode())),
+		)
+		if s.degradationPolicy.AllowsFallback(domain.DegradationReasonSessionRepositoryUnavailable) {
+			return nil
+		}
 		return ErrInvalidAccessToken
 	}
 
@@ -458,6 +489,18 @@ func (s *AuthService) resolveSessionVersionForToken(ctx context.Context, session
 		ctx = context.Background()
 	}
 
+	if s.sessions == nil {
+		if s.degradationPolicy.AllowsFallback(domain.DegradationReasonSessionRepositoryUnavailable) {
+			s.logger.Warn(
+				"session repository unavailable; allowing access token validation to proceed",
+				zap.String("session_id", sessionID),
+				zap.String("degradation_policy", string(s.degradationPolicy.Mode())),
+			)
+			return 0, nil
+		}
+		return 0, fmt.Errorf("session repository not configured")
+	}
+
 	if s.sessionVersions != nil {
 		if cached, err := s.sessionVersions.GetSessionVersion(ctx, sessionID); err == nil {
 			if cached > 0 {
@@ -470,6 +513,15 @@ func (s *AuthService) resolveSessionVersionForToken(ctx context.Context, session
 
 	session, err := s.sessions.Get(ctx, sessionID)
 	if err != nil {
+		if !errors.Is(err, repository.ErrNotFound) && s.degradationPolicy.AllowsFallback(domain.DegradationReasonSessionLookupFailure) {
+			s.logger.Warn(
+				"fetch session failed; allowing due to degradation policy",
+				zap.String("session_id", sessionID),
+				zap.String("degradation_policy", string(s.degradationPolicy.Mode())),
+				zap.Error(err),
+			)
+			return 0, nil
+		}
 		return 0, fmt.Errorf("fetch session: %w", err)
 	}
 
@@ -691,7 +743,11 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 
 		s.cacheSessionVersion(ctx, sessionID, session.Version)
 		if record.IsStale(session.Version) {
-			return "", "", domain.User{}, nil, ErrStaleRefreshToken
+			return "", "", domain.User{}, nil, &SessionVersionMismatchError{
+				SessionID:      session.ID,
+				TokenVersion:   record.IssuedVersion,
+				CurrentVersion: session.Version,
+			}
 		}
 	}
 
@@ -722,7 +778,23 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 
 	sessionVersion := int64(0)
 	if session != nil {
-		bumpedVersion, bumpErr := s.incrementSessionVersion(ctx, session.ID, "refresh_rotation")
+		bumpMetadata := map[string]any{
+			"source": "refresh_rotation",
+		}
+		if record.ID != "" {
+			bumpMetadata["rotated_from"] = record.ID
+		}
+		if record.FamilyID != "" {
+			bumpMetadata["family_id"] = record.FamilyID
+		}
+		if record.IP != nil && strings.TrimSpace(*record.IP) != "" {
+			bumpMetadata["ip"] = strings.TrimSpace(*record.IP)
+		}
+		if record.UserAgent != nil && strings.TrimSpace(*record.UserAgent) != "" {
+			bumpMetadata["user_agent"] = strings.TrimSpace(*record.UserAgent)
+		}
+
+		bumpedVersion, bumpErr := s.incrementSessionVersion(ctx, session, "refresh_rotation", bumpMetadata)
 		if bumpErr != nil {
 			if errors.Is(bumpErr, repository.ErrNotFound) {
 				return "", "", domain.User{}, nil, ErrInvalidRefreshToken
@@ -731,7 +803,6 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		}
 		if bumpedVersion > 0 {
 			sessionVersion = bumpedVersion
-			session.Version = bumpedVersion
 		} else {
 			sessionVersion = session.Version
 		}
@@ -1101,21 +1172,43 @@ func (s *AuthService) cacheSessionVersion(ctx context.Context, sessionID string,
 	}
 }
 
-func (s *AuthService) incrementSessionVersion(ctx context.Context, sessionID, reason string) (int64, error) {
-	sessionID = strings.TrimSpace(sessionID)
+func (s *AuthService) incrementSessionVersion(ctx context.Context, session *domain.Session, reason string, metadata map[string]any) (int64, error) {
+	if session == nil {
+		return 0, nil
+	}
+
+	sessionID := strings.TrimSpace(session.ID)
 	if sessionID == "" {
 		return 0, nil
 	}
-	if s.sessions == nil {
-		return 0, fmt.Errorf("session repository not configured")
-	}
+
 	normalizedReason := strings.TrimSpace(reason)
 	if normalizedReason == "" {
 		normalizedReason = "session_version_bump"
 	}
+
+	if s.sessionManager != nil {
+		version, err := s.sessionManager.BumpSessionVersion(ctx, session, normalizedReason, metadata)
+		if err != nil {
+			return 0, err
+		}
+		if version > 0 {
+			session.Version = version
+			s.cacheSessionVersion(ctx, sessionID, version)
+		}
+		return version, nil
+	}
+
+	if s.sessions == nil {
+		return 0, fmt.Errorf("session repository not configured")
+	}
+
 	version, err := s.sessions.IncrementVersion(ctx, sessionID, normalizedReason)
 	if err != nil {
 		return 0, err
+	}
+	if version > 0 && session.Version < version {
+		session.Version = version
 	}
 	s.cacheSessionVersion(ctx, sessionID, version)
 	return version, nil

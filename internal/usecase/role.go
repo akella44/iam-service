@@ -50,14 +50,21 @@ type CreateRoleResult struct {
 
 // RoleService manages roles and permissions.
 type RoleService struct {
-	roles       port.RoleRepository
-	permissions port.PermissionRepository
-	users       port.UserRepository
+	roles          port.RoleRepository
+	permissions    port.PermissionRepository
+	users          port.UserRepository
+	sessionManager *SessionService
 }
 
 // NewRoleService constructs a RoleService.
 func NewRoleService(roles port.RoleRepository, permissions port.PermissionRepository, users port.UserRepository) *RoleService {
 	return &RoleService{roles: roles, permissions: permissions, users: users}
+}
+
+// WithSessionService wires the session manager used to bump versions when elevated permissions are granted.
+func (s *RoleService) WithSessionService(manager *SessionService) *RoleService {
+	s.sessionManager = manager
+	return s
 }
 
 // ListRoles returns all roles.
@@ -192,6 +199,13 @@ func (s *RoleService) CreateRole(ctx context.Context, actorID string, input Crea
 
 	result.Role = role
 	result.AssignedUserIDs = uniqueUserIDs
+
+	requiresReauth := permissionsRequireForcedReauth(result.Permissions)
+	if requiresReauth && len(uniqueUserIDs) > 0 {
+		if err := s.bumpSessionsForUsers(ctx, uniqueUserIDs, sessionReasonElevatedPermissions); err != nil {
+			return result, err
+		}
+	}
 
 	return result, nil
 }
@@ -364,9 +378,51 @@ func (s *RoleService) AssignPermissions(ctx context.Context, actorID string, inp
 		uniquePermIDs = append(uniquePermIDs, trimmed)
 	}
 
+	forceReauth := false
+	if s.sessionManager != nil && len(uniquePermIDs) > 0 {
+		existing := make(map[string]struct{})
+		if s.roles != nil {
+			perms, err := s.roles.GetRolePermissions(ctx, roleID)
+			if err != nil {
+				return 0, fmt.Errorf("get current role permissions: %w", err)
+			}
+			for _, perm := range perms {
+				existing[perm.ID] = struct{}{}
+			}
+		}
+
+		if s.permissions != nil {
+			for _, permID := range uniquePermIDs {
+				if _, already := existing[permID]; already {
+					continue
+				}
+				perm, err := s.permissions.GetByID(ctx, permID)
+				if err != nil {
+					if errors.Is(err, repository.ErrNotFound) {
+						continue
+					}
+					return 0, fmt.Errorf("get permission %s: %w", permID, err)
+				}
+				if isForcedReauthPermission(perm.CanonicalName()) {
+					forceReauth = true
+				}
+			}
+		}
+	}
+
 	count, err := s.roles.AssignPermissions(ctx, roleID, uniquePermIDs)
 	if err != nil {
 		return 0, fmt.Errorf("assign permissions: %w", err)
+	}
+
+	if forceReauth && count > 0 {
+		userIDs, err := s.usersWithRole(ctx, roleID)
+		if err != nil {
+			return count, err
+		}
+		if err := s.bumpSessionsForUsers(ctx, userIDs, sessionReasonElevatedPermissions); err != nil {
+			return count, err
+		}
 	}
 
 	return count, nil
@@ -432,4 +488,47 @@ func (s *RoleService) RevokePermissions(ctx context.Context, actorID string, inp
 	}
 
 	return count, nil
+}
+
+func (s *RoleService) bumpSessionsForUsers(ctx context.Context, userIDs []string, reason string) error {
+	if s.sessionManager == nil {
+		return nil
+	}
+	for _, userID := range userIDs {
+		trimmed := strings.TrimSpace(userID)
+		if trimmed == "" {
+			continue
+		}
+		if _, err := s.sessionManager.BumpActiveSessionVersions(ctx, trimmed, reason); err != nil {
+			if errors.Is(err, ErrSessionNotFound) {
+				continue
+			}
+			return fmt.Errorf("bump session versions for user %s: %w", trimmed, err)
+		}
+	}
+	return nil
+}
+
+func (s *RoleService) usersWithRole(ctx context.Context, roleID string) ([]string, error) {
+	if s.users == nil {
+		return nil, nil
+	}
+	users, err := s.users.List(ctx, port.UserFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("list users for role %s: %w", roleID, err)
+	}
+	userIDs := make([]string, 0, len(users))
+	for _, user := range users {
+		assignments, err := s.users.GetUserRoles(ctx, user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("get user roles for %s: %w", user.ID, err)
+		}
+		for _, assignment := range assignments {
+			if assignment.RoleID == roleID {
+				userIDs = append(userIDs, user.ID)
+				break
+			}
+		}
+	}
+	return userIDs, nil
 }

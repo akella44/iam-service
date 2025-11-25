@@ -187,8 +187,10 @@ func (f *fakeSessionRepository) SetVersion(ctx context.Context, sessionID string
 }
 
 type fakeEventPublisher struct {
-	sessionRevoked []domain.SessionRevokedEvent
-	fail           error
+	sessionRevoked       []domain.SessionRevokedEvent
+	sessionVersionBumped []domain.SessionVersionBumpedEvent
+	subjectVersionBumped []domain.SubjectVersionBumpedEvent
+	fail                 error
 }
 
 func (f *fakeEventPublisher) PublishUserRegistered(ctx context.Context, event domain.UserRegisteredEvent) error {
@@ -216,6 +218,22 @@ func (f *fakeEventPublisher) PublishSessionRevoked(ctx context.Context, event do
 		return f.fail
 	}
 	f.sessionRevoked = append(f.sessionRevoked, event)
+	return nil
+}
+
+func (f *fakeEventPublisher) PublishSessionVersionBumped(ctx context.Context, event domain.SessionVersionBumpedEvent) error {
+	if f.fail != nil {
+		return f.fail
+	}
+	f.sessionVersionBumped = append(f.sessionVersionBumped, event)
+	return nil
+}
+
+func (f *fakeEventPublisher) PublishSubjectVersionBumped(ctx context.Context, event domain.SubjectVersionBumpedEvent) error {
+	if f.fail != nil {
+		return f.fail
+	}
+	f.subjectVersionBumped = append(f.subjectVersionBumped, event)
 	return nil
 }
 
@@ -310,5 +328,90 @@ func TestSessionService_ListSessions(t *testing.T) {
 	svcEmpty := NewSessionService(repoEmpty, nil, nil, nil)
 	if _, err := svcEmpty.ListSessions(ctx, "user-404", true); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+func TestSessionService_BumpSessionVersionPublishesEvent(t *testing.T) {
+	t.Helper()
+
+	base := time.Date(2025, 10, 20, 9, 0, 0, 0, time.UTC)
+	deviceID := "device-1"
+	deviceLabel := "Safari on iOS"
+	ip := "198.51.100.25"
+	ua := "Mozilla/5.0"
+
+	session := domain.Session{
+		ID:          "session-evt-1",
+		UserID:      "user-evt-1",
+		FamilyID:    "family-evt",
+		Version:     1,
+		DeviceID:    &deviceID,
+		DeviceLabel: &deviceLabel,
+		IPLast:      &ip,
+		UserAgent:   &ua,
+		CreatedAt:   base.Add(-2 * time.Hour),
+		LastSeen:    base.Add(-10 * time.Minute),
+		ExpiresAt:   base.Add(6 * time.Hour),
+	}
+
+	repo := newFakeSessionRepository(session)
+	repo.now = func() time.Time { return base }
+	publisher := &fakeEventPublisher{}
+	svc := NewSessionService(repo, nil, publisher, nil)
+	svc.WithClock(func() time.Time { return base })
+
+	metadata := map[string]any{"actor": "unit-test"}
+	version, err := svc.BumpSessionVersion(context.Background(), &session, "Refresh Rotation", metadata)
+	if err != nil {
+		t.Fatalf("BumpSessionVersion returned error: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("expected bumped version 2, got %d", version)
+	}
+	if session.Version != 2 {
+		t.Fatalf("expected session struct to reflect version 2, got %d", session.Version)
+	}
+	if len(repo.versionCalls) != 1 {
+		t.Fatalf("expected single repository version increment, got %d", len(repo.versionCalls))
+	}
+	if repo.versionCalls[0].sessionID != "session-evt-1" || repo.versionCalls[0].reason != "refresh_rotation" {
+		t.Fatalf("unexpected version call payload: %+v", repo.versionCalls[0])
+	}
+	if len(publisher.sessionVersionBumped) != 1 {
+		t.Fatalf("expected one published event, got %d", len(publisher.sessionVersionBumped))
+	}
+	event := publisher.sessionVersionBumped[0]
+	if event.SessionID != "session-evt-1" || event.UserID != "user-evt-1" {
+		t.Fatalf("unexpected event payload: %+v", event)
+	}
+	if event.Version != 2 {
+		t.Fatalf("expected event version 2, got %d", event.Version)
+	}
+	if event.Reason != "refresh_rotation" {
+		t.Fatalf("expected normalized reason refresh_rotation, got %s", event.Reason)
+	}
+	if !event.BumpedAt.Equal(base) {
+		t.Fatalf("expected event timestamp %s, got %s", base, event.BumpedAt)
+	}
+	if event.Metadata == nil {
+		t.Fatalf("expected metadata to include actor, got nil")
+	}
+	if got := event.Metadata["actor"]; got != "unit-test" {
+		t.Fatalf("expected metadata actor=unit-test, got %v", got)
+	}
+	if got := event.Metadata["device_label"]; got != deviceLabel {
+		t.Fatalf("expected metadata device_label=%s, got %v", deviceLabel, got)
+	}
+	if got := event.Metadata["device_id"]; got != deviceID {
+		t.Fatalf("expected metadata device_id=%s, got %v", deviceID, got)
+	}
+	if got := event.Metadata["family_id"]; got != session.FamilyID {
+		t.Fatalf("expected metadata family_id=%s, got %v", session.FamilyID, got)
+	}
+	if got := event.Metadata["ip"]; got != ip {
+		t.Fatalf("expected metadata ip=%s, got %v", ip, got)
+	}
+	if got := event.Metadata["user_agent"]; got != ua {
+		t.Fatalf("expected metadata user_agent=%s, got %v", ua, got)
 	}
 }

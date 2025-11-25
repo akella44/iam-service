@@ -358,6 +358,14 @@ func (m *userCRUDEventPublisherMock) PublishSessionRevoked(_ context.Context, ev
 	return nil
 }
 
+func (m *userCRUDEventPublisherMock) PublishSessionVersionBumped(_ context.Context, event domain.SessionVersionBumpedEvent) error {
+	return nil
+}
+
+func (m *userCRUDEventPublisherMock) PublishSubjectVersionBumped(_ context.Context, event domain.SubjectVersionBumpedEvent) error {
+	return nil
+}
+
 // Tests
 
 func TestUserService_CreateUserAdmin_Success(t *testing.T) {

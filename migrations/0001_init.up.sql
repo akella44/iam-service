@@ -1,12 +1,7 @@
 BEGIN;
 
--- ==========================================================================
--- IAM Service Initial Schema (combined from prior incrementals)
--- ==========================================================================
-
-DROP SCHEMA IF EXISTS iam CASCADE;
-CREATE SCHEMA iam;
-SET search_path = iam, public;
+CREATE SCHEMA IF NOT EXISTS iam;
+SET search_path TO iam, public;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS citext;     -- case-insensitive email/username
@@ -16,11 +11,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
     CREATE TYPE user_status AS ENUM ('pending','active','locked','disabled');
   END IF;
-END$$;
+END
+$$;
 
--- ==========================================================================
--- 1) TABLES
--- ==========================================================================
+-- ========================================================================
+-- Core tables
+-- ========================================================================
 
 CREATE TABLE IF NOT EXISTS users (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -45,14 +41,15 @@ CREATE TABLE IF NOT EXISTS roles (
 );
 
 CREATE TABLE IF NOT EXISTS permissions (
-  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name              TEXT NOT NULL,
-  description       TEXT,
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        TEXT NOT NULL UNIQUE,
   service_namespace TEXT NOT NULL,
-  action            TEXT NOT NULL,
-  CONSTRAINT permissions_name_unique UNIQUE (name),
-  CONSTRAINT permissions_service_namespace_action_unique UNIQUE (service_namespace, action),
-  CONSTRAINT permissions_name_format_chk CHECK (name = service_namespace || ':' || action)
+  action      TEXT NOT NULL,
+  description TEXT,
+  CONSTRAINT permissions_name_format_chk
+    CHECK (name = service_namespace || ':' || action),
+  CONSTRAINT permissions_service_namespace_action_unique
+    UNIQUE (service_namespace, action)
 );
 
 CREATE TABLE IF NOT EXISTS role_permissions (
@@ -85,39 +82,39 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash  TEXT NOT NULL UNIQUE,
-  client_id   TEXT,
-  ip          INET,
-  user_agent  TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at  TIMESTAMPTZ NOT NULL,
-  revoked_at  TIMESTAMPTZ,
-  session_id  UUID,
-  family_id   UUID NOT NULL DEFAULT gen_random_uuid(),
-  issued_version BIGINT NOT NULL DEFAULT 1,
-  used_at     TIMESTAMPTZ,
-  metadata    JSONB
+CREATE TABLE IF NOT EXISTS sessions (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  family_id     UUID NOT NULL DEFAULT gen_random_uuid(),
+  session_version BIGINT NOT NULL DEFAULT 1,
+  refresh_token_id UUID UNIQUE,
+  device_id     TEXT,
+  device_label  TEXT,
+  ip_first      INET,
+  ip_last       INET,
+  user_agent    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  revoked_at    TIMESTAMPTZ,
+  revoke_reason TEXT
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  session_version  BIGINT NOT NULL DEFAULT 1,
-  refresh_token_id UUID REFERENCES refresh_tokens(id) ON DELETE SET NULL,
-  family_id        UUID NOT NULL DEFAULT gen_random_uuid(),
-  device_id        TEXT,
-  device_label     TEXT,
-  ip_first         INET,
-  ip_last          INET,
-  user_agent       TEXT,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at       TIMESTAMPTZ NOT NULL,
-  revoked_at       TIMESTAMPTZ,
-  revoke_reason    TEXT
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id    UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  family_id     UUID NOT NULL DEFAULT gen_random_uuid(),
+  issued_version BIGINT NOT NULL DEFAULT 0,
+  token_hash    TEXT NOT NULL UNIQUE,
+  client_id     TEXT,
+  ip            INET,
+  user_agent    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  used_at       TIMESTAMPTZ,
+  revoked_at    TIMESTAMPTZ,
+  metadata      JSONB
 );
 
 CREATE TABLE IF NOT EXISTS session_events (
@@ -174,6 +171,56 @@ CREATE TABLE IF NOT EXISTS revoked_access_token_jti (
   reason     TEXT
 );
 
+-- ========================================================================
+-- Subject version tracking
+-- ========================================================================
+
+CREATE TABLE IF NOT EXISTS subject_versions (
+  subject_id UUID PRIMARY KEY,
+  current_version BIGINT NOT NULL DEFAULT 1,
+  not_before TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by TEXT NOT NULL,
+  reason TEXT,
+  CONSTRAINT subject_versions_positive_version CHECK (current_version >= 1)
+);
+
+CREATE TABLE IF NOT EXISTS subject_version_audit (
+  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  subject_id UUID NOT NULL,
+  previous_version BIGINT,
+  new_version BIGINT NOT NULL,
+  previous_not_before TIMESTAMPTZ,
+  new_not_before TIMESTAMPTZ,
+  actor TEXT NOT NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ========================================================================
+-- Token revocation tracking
+-- ========================================================================
+
+CREATE TABLE IF NOT EXISTS token_revocations (
+  revocation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  jti           TEXT NOT NULL UNIQUE,
+  subject_id    UUID NOT NULL,
+  session_id    UUID,
+  expires_at    TIMESTAMPTZ NOT NULL,
+  reason        TEXT,
+  actor         TEXT,
+  issued_by     TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  metadata      JSONB
+);
+
+CREATE TABLE IF NOT EXISTS gateway_cache_snapshot (
+  snapshot_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  payload      BYTEA NOT NULL,
+  checksum     TEXT NOT NULL
+);
+
 -- ==========================================================================
 -- 2) FUNCTIONS / TRIGGERS
 -- ==========================================================================
@@ -227,14 +274,16 @@ CREATE OR REPLACE FUNCTION session_bump_version(p_session_id UUID, p_reason TEXT
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
   new_version BIGINT;
+  reason TEXT := NULLIF(trim(COALESCE(p_reason, '')), '');
 BEGIN
   UPDATE sessions
      SET session_version = session_version + 1
    WHERE id = p_session_id
+     AND revoked_at IS NULL
    RETURNING session_version INTO new_version;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'session % not found', p_session_id USING ERRCODE = 'NO_DATA_FOUND';
+    RAISE EXCEPTION 'session % not found or inactive', p_session_id USING ERRCODE = 'NO_DATA_FOUND';
   END IF;
 
   INSERT INTO session_events (id, session_id, kind, details)
@@ -243,7 +292,7 @@ BEGIN
     p_session_id,
     'session_version_bumped',
     jsonb_strip_nulls(jsonb_build_object(
-      'reason', NULLIF(trim(COALESCE(p_reason, '')) , ''),
+      'reason', reason,
       'version', new_version
     ))
   );
@@ -256,12 +305,12 @@ CREATE OR REPLACE FUNCTION session_revoke(p_session_id UUID, p_reason TEXT DEFAU
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
   refreshed RECORD;
+  reason TEXT := COALESCE(NULLIF(trim(COALESCE(p_reason, '')) , ''), 'manual_revoke');
 BEGIN
   UPDATE sessions
-     SET revoked_at = now(),
-         revoke_reason = p_reason
+     SET revoked_at = COALESCE(revoked_at, now()),
+         revoke_reason = reason
    WHERE id = p_session_id
-     AND revoked_at IS NULL
   RETURNING id, family_id INTO refreshed;
 
   IF refreshed IS NULL THEN
@@ -273,10 +322,10 @@ BEGIN
    WHERE session_id = refreshed.id
       OR family_id = refreshed.family_id;
 
-  PERFORM revoke_session_access_tokens(refreshed.id, p_reason);
+  PERFORM revoke_session_access_tokens(refreshed.id, reason);
 
   INSERT INTO session_events(session_id, kind, details)
-  VALUES (refreshed.id, 'logout', jsonb_build_object('reason', p_reason));
+  VALUES (refreshed.id, 'logout', jsonb_build_object('reason', reason));
 END$$;
 
 CREATE OR REPLACE FUNCTION session_revoke_all_for_user(p_user_id UUID, p_reason TEXT DEFAULT 'global_signout')
@@ -302,15 +351,14 @@ END$$;
 -- 3) INDEXES & CONSTRAINTS
 -- ==========================================================================
 
-CREATE INDEX IF NOT EXISTS idx_permissions__service_namespace
-  ON permissions(service_namespace);
-
 CREATE INDEX IF NOT EXISTS idx_users__status         ON users(status);
 CREATE INDEX IF NOT EXISTS idx_users__last_login     ON users(last_login);
 CREATE INDEX IF NOT EXISTS idx_users__username_email ON users(username, email);
 
 CREATE INDEX IF NOT EXISTS idx_roles__name           ON roles(name);
 CREATE INDEX IF NOT EXISTS idx_permissions__name     ON permissions(name);
+CREATE INDEX IF NOT EXISTS idx_permissions__service_namespace
+  ON permissions(service_namespace);
 CREATE INDEX IF NOT EXISTS idx_role_permissions__perm  ON role_permissions(permission_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles__role         ON user_roles(role_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles__assigned_at  ON user_roles(assigned_at);
@@ -326,13 +374,11 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts__ip_ts       ON login_attempts(ip,
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__user        ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__expires     ON refresh_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__created     ON refresh_tokens(created_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens__session_id  ON refresh_tokens(session_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens__family_id   ON refresh_tokens(family_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens__active_user
   ON refresh_tokens(user_id, expires_at)
   WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens__family_id ON refresh_tokens(family_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens__session_id ON refresh_tokens(session_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens__session_issued_version
-  ON refresh_tokens(session_id, issued_version);
 
 CREATE INDEX IF NOT EXISTS idx_sessions__user_lastseen ON sessions(user_id, last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions__active_user
@@ -341,12 +387,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions__active_user
 CREATE INDEX IF NOT EXISTS idx_sessions__device_active
   ON sessions(device_id)
   WHERE device_id IS NOT NULL AND revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_sessions__refresh_id ON sessions(refresh_token_id);
 CREATE INDEX IF NOT EXISTS idx_sessions__expires    ON sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_sessions__family_id  ON sessions(family_id);
 CREATE INDEX IF NOT EXISTS idx_sessions__user_id    ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions__session_version
-  ON sessions(session_version);
+CREATE INDEX IF NOT EXISTS idx_sessions__family_id  ON sessions(family_id);
 
 CREATE INDEX IF NOT EXISTS idx_session_events__sess_at ON session_events(session_id, at DESC);
 
@@ -369,8 +412,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_verify__active_per_user_purpose
   ON verification_tokens(user_id, purpose)
   WHERE used_at IS NULL AND revoked_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_atj__user_exp       ON access_token_jti(user_id, expires_at);
-CREATE INDEX IF NOT EXISTS idx_atj__session        ON access_token_jti(session_id);
-CREATE INDEX IF NOT EXISTS idx_atj__valid_fast     ON access_token_jti(expires_at);
-CREATE INDEX IF NOT EXISTS idx_atj__user_issued    ON access_token_jti(user_id, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_atj__user_issued
+  ON access_token_jti(user_id, issued_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_revoked_atj__recent
+  ON revoked_access_token_jti(revoked_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_subject_version_audit_subject_created_at
+  ON subject_version_audit(subject_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_token_revocations_subject ON token_revocations(subject_id);
+CREATE INDEX IF NOT EXISTS idx_token_revocations_expires_at ON token_revocations(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_cache_snapshot_generated_at
+  ON gateway_cache_snapshot(generated_at DESC);
 COMMIT;

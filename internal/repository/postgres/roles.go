@@ -18,6 +18,7 @@ import (
 // RoleRepository implements role persistence operations.
 type RoleRepository struct {
 	pool    *pgxpool.Pool
+	exec    pgExecutor
 	builder squirrel.StatementBuilderType
 }
 
@@ -25,7 +26,20 @@ type RoleRepository struct {
 func NewRoleRepository(pool *pgxpool.Pool) *RoleRepository {
 	return &RoleRepository{
 		pool:    pool,
+		exec:    pool,
 		builder: squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar),
+	}
+}
+
+// WithTx returns a repository configured to execute within the provided transaction.
+func (r *RoleRepository) WithTx(tx pgx.Tx) *RoleRepository {
+	if tx == nil {
+		return r
+	}
+	return &RoleRepository{
+		pool:    r.pool,
+		exec:    tx,
+		builder: r.builder,
 	}
 }
 
@@ -39,7 +53,7 @@ func (r *RoleRepository) Create(ctx context.Context, role domain.Role) error {
 		return fmt.Errorf("build insert role sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("insert role: %w", err)
 	}
 
@@ -56,7 +70,7 @@ func (r *RoleRepository) List(ctx context.Context) ([]domain.Role, error) {
 		return nil, fmt.Errorf("build list roles sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query roles: %w", err)
 	}
@@ -90,7 +104,7 @@ func (r *RoleRepository) GetByName(ctx context.Context, name string) (*domain.Ro
 		return nil, fmt.Errorf("build select role by name sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var (
 		role        domain.Role
@@ -122,7 +136,7 @@ func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, 
 		return nil, fmt.Errorf("build select role by id sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var (
 		role        domain.Role
@@ -154,7 +168,7 @@ func (r *RoleRepository) Update(ctx context.Context, role domain.Role) error {
 		return fmt.Errorf("build update role sql: %w", err)
 	}
 
-	res, err := r.pool.Exec(ctx, stmt, args...)
+	res, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update role: %w", err)
 	}
@@ -175,7 +189,7 @@ func (r *RoleRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("build delete role sql: %w", err)
 	}
 
-	res, err := r.pool.Exec(ctx, stmt, args...)
+	res, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("delete role: %w", err)
 	}
@@ -205,7 +219,7 @@ func (r *RoleRepository) AssignPermissions(ctx context.Context, roleID string, p
 		return 0, fmt.Errorf("build assign role permissions sql: %w", err)
 	}
 
-	res, err := r.pool.Exec(ctx, stmt, args...)
+	res, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("assign role permissions: %w", err)
 	}
@@ -253,7 +267,7 @@ func (r *RoleRepository) GetRolePermissions(ctx context.Context, roleID string) 
 		return nil, fmt.Errorf("build role permissions sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query role permissions: %w", err)
 	}
@@ -307,7 +321,7 @@ func (r *RoleRepository) AssignToUsers(ctx context.Context, roleID string, userI
 		return fmt.Errorf("build assign role to users sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("assign role to users: %w", err)
 	}
 
@@ -326,7 +340,7 @@ func (r *RoleRepository) ListByUser(ctx context.Context, userID string) ([]domai
 		return nil, fmt.Errorf("build roles by user sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query roles by user: %w", err)
 	}

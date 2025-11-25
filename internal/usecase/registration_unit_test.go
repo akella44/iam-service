@@ -272,6 +272,14 @@ func (m *mockEventPublisher) PublishSessionRevoked(context.Context, domain.Sessi
 	return nil
 }
 
+func (m *mockEventPublisher) PublishSessionVersionBumped(context.Context, domain.SessionVersionBumpedEvent) error {
+	return nil
+}
+
+func (m *mockEventPublisher) PublishSubjectVersionBumped(context.Context, domain.SubjectVersionBumpedEvent) error {
+	return nil
+}
+
 func TestRegistrationService_RegisterUser_EmailMagicLink(t *testing.T) {
 	userRepo := &mockUserRepository{}
 	tokenRepo := &mockTokenRepository{}

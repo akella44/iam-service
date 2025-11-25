@@ -78,3 +78,43 @@ type SessionEvent struct {
 	UserAgent *string
 	Details   map[string]any
 }
+
+// SubjectVersion represents the authoritative version contract for a subject.
+type SubjectVersion struct {
+	SubjectID      string
+	CurrentVersion int64
+	NotBefore      *time.Time
+	UpdatedAt      time.Time
+	UpdatedBy      string
+	Reason         *string
+}
+
+// SubjectVersionChange captures previous and current state for audit and event emission.
+type SubjectVersionChange struct {
+	Previous *SubjectVersion
+	Current  SubjectVersion
+}
+
+// SubjectVersionMutation describes the intent to modify a subject's version or not-before timestamp.
+type SubjectVersionMutation struct {
+	SubjectID  string
+	Actor      string
+	Reason     string
+	NewVersion *int64
+	NotBefore  *time.Time
+	Metadata   map[string]any
+	AppliedAt  time.Time
+}
+
+// SubjectVersionAuditEntry records immutable audit log rows for version changes.
+type SubjectVersionAuditEntry struct {
+	EventID           string
+	SubjectID         string
+	PreviousVersion   *int64
+	NewVersion        int64
+	PreviousNotBefore *time.Time
+	NewNotBefore      *time.Time
+	Actor             string
+	Reason            string
+	CreatedAt         time.Time
+}

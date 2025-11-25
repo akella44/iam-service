@@ -80,3 +80,41 @@ type SessionRevokedEvent struct {
 	IPAddress     *string
 	Metadata      map[string]any
 }
+
+// SessionVersionBumpedEvent represents the payload for iam.session.version.bumped messages.
+type SessionVersionBumpedEvent struct {
+	EventID   string
+	SessionID string
+	UserID    string
+	Version   int64
+	Reason    string
+	BumpedAt  time.Time
+	Metadata  map[string]any
+}
+
+// SubjectVersionBumpedEvent represents the payload for iam.subject.version.bumped messages.
+type SubjectVersionBumpedEvent struct {
+	EventID           string
+	SubjectID         string
+	PreviousVersion   *int64
+	NewVersion        int64
+	PreviousNotBefore *time.Time
+	NewNotBefore      *time.Time
+	Actor             string
+	Reason            string
+	BumpedAt          time.Time
+	Metadata          map[string]any
+}
+
+// TokenRevokedEvent represents the payload for iam.token.revoked messages.
+type TokenRevokedEvent struct {
+	EventID   string
+	JTI       string
+	SubjectID string
+	SessionID *string
+	ExpiresAt time.Time
+	Reason    string
+	Actor     string
+	RevokedAt time.Time
+	Metadata  map[string]any
+}

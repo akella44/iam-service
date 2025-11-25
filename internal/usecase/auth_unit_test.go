@@ -633,6 +633,109 @@ func TestAuthService_ParseAccessToken_Errors(t *testing.T) {
 	}
 }
 
+func TestAuthService_ParseAccessToken_AllowsMissingSessionRepositoryInLenientMode(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+
+	cfg := &config.AppConfig{
+		App: config.AppSettings{Name: "test-app", Env: "development"},
+		JWT: config.JWTSettings{KeyDirectory: keyDir},
+	}
+
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("NewTokenGenerator failed: %v", err)
+	}
+
+	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	signingKey, err := keyProvider.GetSigningKey()
+	if err != nil {
+		t.Fatalf("failed to get signing key: %v", err)
+	}
+
+	claims := security.AccessTokenClaims{
+		UserID:         "user-1",
+		SessionID:      "session-123",
+		SessionVersion: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   security.HashToken("user-1:" + cfg.App.Name),
+			Issuer:    cfg.App.Name,
+			Audience:  jwt.ClaimStrings{cfg.App.Name},
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			ID:        uuid.NewString(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "private"
+	signed, err := token.SignedString(signingKey)
+	if err != nil {
+		t.Fatalf("failed to sign access token: %v", err)
+	}
+
+	if _, err := service.ParseAccessToken(context.Background(), signed); err != nil {
+		t.Fatalf("expected lenient policy to accept token, got %v", err)
+	}
+}
+
+func TestAuthService_ParseAccessToken_RejectsWhenSessionRepositoryMissingInStrictMode(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+
+	cfg := &config.AppConfig{
+		App:        config.AppSettings{Name: "test-app", Env: "development"},
+		JWT:        config.JWTSettings{KeyDirectory: keyDir},
+		Revocation: config.RevocationSettings{DegradationPolicy: "strict"},
+	}
+
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("NewTokenGenerator failed: %v", err)
+	}
+
+	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	signingKey, err := keyProvider.GetSigningKey()
+	if err != nil {
+		t.Fatalf("failed to get signing key: %v", err)
+	}
+
+	claims := security.AccessTokenClaims{
+		UserID:         "user-1",
+		SessionID:      "session-123",
+		SessionVersion: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   security.HashToken("user-1:" + cfg.App.Name),
+			Issuer:    cfg.App.Name,
+			Audience:  jwt.ClaimStrings{cfg.App.Name},
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			ID:        uuid.NewString(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "private"
+	signed, err := token.SignedString(signingKey)
+	if err != nil {
+		t.Fatalf("failed to sign access token: %v", err)
+	}
+
+	if _, err := service.ParseAccessToken(context.Background(), signed); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("expected strict policy to reject token, got %v", err)
+	}
+}
+
 func TestAuthService_ParseAccessToken_RejectsStaleSessionVersion(t *testing.T) {
 	keyProvider, keyDir := createTestKeyProvider(t)
 

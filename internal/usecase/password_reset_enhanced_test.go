@@ -199,6 +199,8 @@ type passwordResetEventPublisherMock struct {
 	passwordChanged        []domain.PasswordChangedEvent
 	passwordResetRequested []domain.PasswordResetRequestedEvent
 	sessionRevoked         []domain.SessionRevokedEvent
+	sessionVersionBumped   []domain.SessionVersionBumpedEvent
+	subjectVersionBumped   []domain.SubjectVersionBumpedEvent
 }
 
 func (m *passwordResetEventPublisherMock) PublishUserRegistered(_ context.Context, _ domain.UserRegisteredEvent) error {
@@ -225,6 +227,16 @@ func (m *passwordResetEventPublisherMock) PublishRolesRevoked(_ context.Context,
 
 func (m *passwordResetEventPublisherMock) PublishSessionRevoked(_ context.Context, event domain.SessionRevokedEvent) error {
 	m.sessionRevoked = append(m.sessionRevoked, event)
+	return nil
+}
+
+func (m *passwordResetEventPublisherMock) PublishSessionVersionBumped(_ context.Context, event domain.SessionVersionBumpedEvent) error {
+	m.sessionVersionBumped = append(m.sessionVersionBumped, event)
+	return nil
+}
+
+func (m *passwordResetEventPublisherMock) PublishSubjectVersionBumped(_ context.Context, event domain.SubjectVersionBumpedEvent) error {
+	m.subjectVersionBumped = append(m.subjectVersionBumped, event)
 	return nil
 }
 

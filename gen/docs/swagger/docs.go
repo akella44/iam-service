@@ -15,31 +15,82 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/.well-known/jwks.json": {
-            "get": {
-                "description": "Exposes the public keys used to verify IAM JWT signatures.",
+        "/api/v1/admin/subjects/{subjectId}/session-version": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Increments a subject's session version or adjusts the not-before timestamp for revocation workflows.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Public"
+                    "Subjects"
                 ],
-                "summary": "Retrieve JSON Web Key Set",
-                "responses": {
-                    "200": {
-                        "description": "OK",
+                "summary": "Bump a subject session version",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer access token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Subject identifier",
+                        "name": "subjectId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Subject version bump request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.JWKSResponse"
+                            "$ref": "#/definitions/handlers.SubjectVersionBumpRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SubjectVersionBumpResponse"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
-                    "503": {
-                        "description": "Service Unavailable",
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -187,137 +238,9 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": "Refresh token stale",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/auth/register": {
-            "post": {
-                "description": "Creates a new user with the supplied credentials and contact information.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Authentication"
-                ],
-                "summary": "Register a new user account",
-                "parameters": [
-                    {
-                        "description": "Registration request payload",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.RegistrationRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.RegistrationResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/auth/token/refresh": {
-            "post": {
-                "description": "Issues a new access token using a valid refresh token.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Authentication"
-                ],
-                "summary": "Refresh an access token",
-                "parameters": [
-                    {
-                        "description": "Refresh request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.TokenRefreshRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.TokenRefreshResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/middleware.ProblemDetails"
                         }
                     },
                     "403": {
@@ -1163,40 +1086,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.JWKSKey": {
-            "type": "object",
-            "properties": {
-                "alg": {
-                    "type": "string"
-                },
-                "e": {
-                    "type": "string"
-                },
-                "kid": {
-                    "type": "string"
-                },
-                "kty": {
-                    "type": "string"
-                },
-                "n": {
-                    "type": "string"
-                },
-                "use": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.JWKSResponse": {
-            "type": "object",
-            "properties": {
-                "keys": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.JWKSKey"
-                    }
-                }
-            }
-        },
         "handlers.PasswordChangeRequest": {
             "type": "object",
             "required": [
@@ -1475,9 +1364,6 @@ const docTemplate = `{
         "handlers.SessionBulkRevokeResponse": {
             "type": "object",
             "properties": {
-                "message": {
-                    "type": "string"
-                },
                 "revoked_count": {
                     "type": "integer"
                 },
@@ -1530,6 +1416,9 @@ const docTemplate = `{
                 "is_current": {
                     "type": "boolean"
                 },
+                "issued_version": {
+                    "type": "integer"
+                },
                 "last_seen": {
                     "type": "string"
                 },
@@ -1541,6 +1430,9 @@ const docTemplate = `{
                 },
                 "revoked_at": {
                     "type": "string"
+                },
+                "session_version": {
+                    "type": "integer"
                 },
                 "user_agent": {
                     "type": "string"
@@ -1567,6 +1459,9 @@ const docTemplate = `{
                 },
                 "last_seen": {
                     "type": "string"
+                },
+                "session_version": {
+                    "type": "integer"
                 }
             }
         },
@@ -1589,6 +1484,40 @@ const docTemplate = `{
                 },
                 "valid": {
                     "type": "boolean"
+                }
+            }
+        },
+        "handlers.SubjectVersionBumpRequest": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "type": "string"
+                },
+                "new_version": {
+                    "type": "integer"
+                },
+                "not_before": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SubjectVersionBumpResponse": {
+            "type": "object",
+            "properties": {
+                "new_version": {
+                    "type": "integer"
+                },
+                "not_before": {
+                    "type": "string"
+                },
+                "propagated_at": {
+                    "type": "string"
+                },
+                "subject_id": {
+                    "type": "string"
                 }
             }
         },
@@ -1654,6 +1583,10 @@ const docTemplate = `{
             "properties": {
                 "detail": {
                     "type": "string"
+                },
+                "extensions": {
+                    "type": "object",
+                    "additionalProperties": {}
                 },
                 "instance": {
                     "type": "string"

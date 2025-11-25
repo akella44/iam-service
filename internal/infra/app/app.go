@@ -49,7 +49,6 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init telemetry: %w", err)
 	}
-	_ = telemetryProvider
 
 	pool, err := database.NewPostgresPool(ctx, cfg.Postgres, log)
 	if err != nil {
@@ -89,7 +88,37 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		sessionVersionTTL = 10 * time.Minute
 	}
 
+	subjectVersionCache := redisrepo.NewSubjectVersionCache(redisClient.Client(), cfg.Redis.SubjectVersionPrefix)
+	subjectVersionTTL := cfg.Revocation.Cache.SubjectVersionTTL
+	if subjectVersionTTL <= 0 {
+		subjectVersionTTL = 2 * time.Minute
+	}
+
+	jtiCache := security.NewJTIDenylistCache(security.JTIDenylistOptions{
+		WindowDuration: cfg.Revocation.Bloom.WindowDuration,
+		WindowCount:    cfg.Revocation.Bloom.WindowCount,
+	})
+	jtiSnapshotStore := redisrepo.NewJTIDenylistSnapshotRepository(redisClient.Client(), "", cfg.Revocation.Cache.DenylistSnapshotTTL)
+	if jtiSnapshotStore != nil {
+		if snapshot, err := jtiSnapshotStore.LoadLatestSnapshot(ctx); err != nil {
+			log.Warn("failed to restore denylist snapshot", zap.Error(err))
+		} else if snapshot != nil {
+			if err := jtiCache.RestoreSnapshot(ctx, *snapshot); err != nil {
+				log.Warn("failed to hydrate denylist cache from snapshot", zap.Error(err))
+			}
+		}
+	}
+
 	repos := postgresrepo.NewRepositories(pool)
+
+	subjectVersionTx := func(ctx context.Context, fn func(repo port.SubjectVersionRepository) error) error {
+		return repos.WithinTransaction(ctx, func(txRepos *postgresrepo.Repositories) error {
+			if txRepos.SubjectVersions == nil {
+				return fmt.Errorf("subject version repository not configured")
+			}
+			return fn(txRepos.SubjectVersions)
+		})
+	}
 
 	// Initialize Kafka event publisher
 	var eventPublisher port.EventPublisher
@@ -133,9 +162,31 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 	authService.WithSessionService(sessionService)
 	authService.WithSessionVersionCache(sessionVersionCache, sessionVersionTTL)
 
+	subjectVersionService := usecase.NewSubjectVersionService(repos.SubjectVersions, subjectVersionTx, subjectVersionCache, eventPublisher, usecase.SubjectVersionOptions{
+		CacheTTL: subjectVersionTTL,
+	}).WithLogger(log)
+	var jtiMetrics port.JTIDenylistMetrics
+	if telemetryProvider != nil {
+		subjectVersionService.WithMetrics(telemetryProvider.SubjectVersionMetrics())
+		jtiMetrics = telemetryProvider.JTIDenylistMetrics()
+	}
+
+	_ = kafkainfra.NewSubjectVersionConsumer(subjectVersionCache, subjectVersionTTL, log)
+	jtiSnapshotInterval := cfg.Revocation.Cache.DenylistSnapshotTTL / 2
+	if jtiSnapshotInterval <= 0 {
+		jtiSnapshotInterval = 30 * time.Second
+	}
+	_ = kafkainfra.NewJTIDenylistConsumer(jtiCache, jtiSnapshotStore, jtiMetrics, log, kafkainfra.JTIDenylistConsumerOptions{
+		SnapshotInterval: jtiSnapshotInterval,
+		MaxEventLag:      cfg.Revocation.Replay.MaxEventLag,
+		ReplayTolerance:  cfg.Revocation.Replay.ReplayTolerance,
+	})
+
 	registrationService := usecase.NewRegistrationService(repos.Users, repos.Tokens, passwordPolicy, eventPublisher).WithLogger(log)
-	userService := usecase.NewUserService(repos.Users, repos.Permissions, repos.Roles, eventPublisher, passwordValidator)
-	roleService := usecase.NewRoleService(repos.Roles, repos.Permissions, repos.Users)
+	userService := usecase.NewUserService(repos.Users, repos.Permissions, repos.Roles, eventPublisher, passwordValidator).
+		WithSessionService(sessionService)
+	roleService := usecase.NewRoleService(repos.Roles, repos.Permissions, repos.Users).
+		WithSessionService(sessionService)
 	passwordResetService := usecase.NewPasswordResetService(cfg, repos.Users, repos.Tokens, rateLimitStore, eventPublisher, sessionService, passwordValidator, passwordPolicy, log)
 
 	grpcSrv, err := transportgrpc.NewServer(transportgrpc.ServerDependencies{
@@ -159,12 +210,13 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Application, error) {
 		Database:    pool,
 		Cache:       redisClient,
 		Services: routes.ServiceSet{
-			Auth:          authService,
-			Registration:  registrationService,
-			Users:         userService,
-			Roles:         roleService,
-			PasswordReset: passwordResetService,
-			Sessions:      sessionService,
+			Auth:            authService,
+			Registration:    registrationService,
+			Users:           userService,
+			Roles:           roleService,
+			PasswordReset:   passwordResetService,
+			Sessions:        sessionService,
+			SubjectVersions: subjectVersionService,
 		},
 	})
 

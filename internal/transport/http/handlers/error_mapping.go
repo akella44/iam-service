@@ -17,6 +17,7 @@ type ErrorCase struct {
 	ProblemType   string
 	ProblemTitle  string
 	ProblemDetail string
+	Extensions    map[string]any
 }
 
 // RespondWithMappedError resolves the provided error against known cases or falls back to a generic response.
@@ -55,6 +56,9 @@ func RespondWithMappedError(c *gin.Context, err error, cases []ErrorCase, fallba
 					Detail:   detail,
 					Instance: instance,
 					TraceID:  middleware.GetTraceID(c),
+				}
+				if len(cs.Extensions) > 0 {
+					problem.Extensions = cs.Extensions
 				}
 				c.JSON(status, problem)
 				return

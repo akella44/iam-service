@@ -71,6 +71,18 @@ JWT_KEY_DIRECTORY=./secrets
 JWT_ACCESS_TOKEN_TTL=15m
 JWT_REFRESH_TOKEN_TTL=168h
 
+# Revocation
+REVOCATION_DEGRADATION_POLICY=lenient
+REVOCATION_CACHE_WARMUP_GRACE_PERIOD=15s
+REVOCATION_CACHE_STALE_TTL=30s
+REVOCATION_CACHE_SUBJECT_VERSION_TTL=2m
+REVOCATION_CACHE_DENYLIST_SNAPSHOT_TTL=5m
+REVOCATION_BLOOM_WINDOW_DURATION=60s
+REVOCATION_BLOOM_WINDOW_COUNT=6
+REVOCATION_BLOOM_FALSE_POSITIVE_RATE=0.001
+REVOCATION_REPLAY_MAX_EVENT_LAG=2s
+REVOCATION_REPLAY_REPLAY_TOLERANCE=5s
+
 # Application
 APP_NAME=iam-service
 APP_ENV=development
@@ -118,6 +130,25 @@ Run unit tests:
 go test ./internal/usecase/... -v
 ```
 
+### Revocation Verification Playbook
+
+Follow this checklist after deploying or changing revocation behaviour:
+
+1. **Refresh Rotation & Reuse Detection**
+	- Call `POST /auth/token/refresh` and confirm a new token pair in the response plus a `refresh_rotated` Kafka event (`iam.refresh_rotated`).
+	- Re-submit the previous refresh token to trigger a `reuse_detected` event and confirm the corresponding audit entry in PostgreSQL (`refresh_audit_log`).
+	- Inspect metrics with `curl http://localhost:8080/metrics | grep iam_http_requests_total` to verify rotation counters increment.
+
+2. **Subject Session Version Bump**
+	- Invoke `POST /admin/subjects/{subjectId}/session-version` (provide `new_version` or `not_before`).
+	- Replay the pre-bump JWT and confirm it is rejected while `iam_subject_version_cache_hits_total` increases relative to misses.
+	- Watch `iam_subject_version_propagation_seconds` (histogram) to ensure p95 ≤ 2s.
+
+3. **Gateway JTI Denylist & Restart Recovery**
+	- Revoke an access token using `POST /admin/tokens/revoke` and expect `iam_jti_revocations_total` to increment.
+	- Restart the gateway (`docker compose restart iam-gateway`) and replay the revoked token to validate immediate 401 responses and snapshot recovery (hit counter increments on `iam_jti_cache_hits_total`).
+	- Monitor `iam_jti_revocation_lag_seconds` for p95 ≤ 1s during the flow.
+
 ### Development seed data
 
 For manual end-to-end testing, apply the development-only seed script after running database migrations:
@@ -156,10 +187,19 @@ The following command demonstrates how an internal service can validate a token 
 ```bash
 grpcurl -plaintext -d '{"token":"<ACCESS_TOKEN>"}' localhost:50051 iam.v1.TokenValidationService.Validate
 ```
+## Observability & Alerting
+
+- Metrics endpoint: `http://<host>:8080/metrics`
+- Critical revocation metrics:
+	- `iam_subject_version_propagation_seconds` — warn at p95 > 1.5s, page at p95 > 2s
+	- `iam_jti_revocation_lag_seconds` — same thresholds as subject version propagation
+	- Cache ratios: compare `iam_subject_version_cache_hits_total` and `iam_jti_cache_hits_total` against their miss counters; investigate if hit ratio < 0.95 for five consecutive minutes
+	- `iam_jti_revocations_total` should align with token revocation audit entries; unexpected spikes trigger incident review
+- Configure `telemetry.otlp_endpoint` to forward OpenTelemetry traces for outbox publishers and Kafka consumers.
+
 ## Roadmap
 - Add MFA
-- JTI list
-- Rate-limits
-- Captcha
-- Token rotation on suspicious activity
+- Adaptive session anomaly detection
+- Device fingerprinting improvements
+- Automated alert runbooks for revocation SLO breaches
 

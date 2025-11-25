@@ -19,6 +19,7 @@ import (
 // UserRepository implements port.UserRepository using PostgreSQL.
 type UserRepository struct {
 	pool    *pgxpool.Pool
+	exec    pgExecutor
 	builder squirrel.StatementBuilderType
 }
 
@@ -26,7 +27,20 @@ type UserRepository struct {
 func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{
 		pool:    pool,
+		exec:    pool,
 		builder: squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar),
+	}
+}
+
+// WithTx returns a repository instance operating within the supplied transaction.
+func (r *UserRepository) WithTx(tx pgx.Tx) *UserRepository {
+	if tx == nil {
+		return r
+	}
+	return &UserRepository{
+		pool:    r.pool,
+		exec:    tx,
+		builder: r.builder,
 	}
 }
 
@@ -75,7 +89,7 @@ func (r *UserRepository) Create(ctx context.Context, user domain.User) error {
 		return fmt.Errorf("build insert user sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, sql, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, sql, args...); err != nil {
 		return fmt.Errorf("insert user: %w", err)
 	}
 
@@ -105,7 +119,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 		return nil, fmt.Errorf("build select user sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var (
 		lastLogin *time.Time
@@ -177,7 +191,7 @@ func (r *UserRepository) GetByIdentifier(ctx context.Context, identifier string)
 		return nil, fmt.Errorf("build select user by identifier sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var (
 		lastLogin *time.Time
@@ -245,7 +259,7 @@ func (r *UserRepository) Update(ctx context.Context, user domain.User) error {
 		return fmt.Errorf("build update user sql: %w", err)
 	}
 
-	ct, err := r.pool.Exec(ctx, stmt, args...)
+	ct, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update user: %w", err)
 	}
@@ -268,7 +282,7 @@ func (r *UserRepository) SoftDelete(ctx context.Context, id string) error {
 		return fmt.Errorf("build soft delete user sql: %w", err)
 	}
 
-	ct, err := r.pool.Exec(ctx, stmt, args...)
+	ct, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("soft delete user: %w", err)
 	}
@@ -319,7 +333,7 @@ func (r *UserRepository) List(ctx context.Context, filter port.UserFilter) ([]do
 		return nil, fmt.Errorf("build list users sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -387,7 +401,7 @@ func (r *UserRepository) Count(ctx context.Context, filter port.UserFilter) (int
 		return 0, fmt.Errorf("build count users sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var count int64
 	if err := row.Scan(&count); err != nil {
@@ -407,7 +421,7 @@ func (r *UserRepository) UpdateStatus(ctx context.Context, id string, status dom
 		return fmt.Errorf("build update user status sql: %w", err)
 	}
 
-	ct, err := r.pool.Exec(ctx, stmt, args...)
+	ct, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update user status: %w", err)
 	}
@@ -431,7 +445,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id string, password
 		return fmt.Errorf("build update password sql: %w", err)
 	}
 
-	ct, err := r.pool.Exec(ctx, stmt, args...)
+	ct, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -462,7 +476,7 @@ func (r *UserRepository) AssignRoles(ctx context.Context, userID string, roleIDs
 		return fmt.Errorf("build assign roles sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("assign roles: %w", err)
 	}
 
@@ -483,7 +497,7 @@ func (r *UserRepository) RevokeRoles(ctx context.Context, userID string, roleIDs
 		return fmt.Errorf("build revoke roles sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("revoke roles: %w", err)
 	}
 
@@ -501,7 +515,7 @@ func (r *UserRepository) GetUserRoles(ctx context.Context, userID string) ([]dom
 		return nil, fmt.Errorf("build get user roles sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query user roles: %w", err)
 	}
@@ -543,7 +557,7 @@ func (r *UserRepository) ListPasswordHistory(ctx context.Context, userID string,
 		return nil, fmt.Errorf("build select password history sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query password history: %w", err)
 	}
@@ -594,7 +608,7 @@ func (r *UserRepository) AddPasswordHistory(ctx context.Context, entry domain.Us
 		return fmt.Errorf("build insert password history sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("insert password history: %w", err)
 	}
 
@@ -624,7 +638,7 @@ func (r *UserRepository) TrimPasswordHistory(ctx context.Context, userID string,
 		   )
 	`
 
-	if _, err := r.pool.Exec(ctx, stmt, trimmedID, maxEntries); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, trimmedID, maxEntries); err != nil {
 		return fmt.Errorf("trim password history: %w", err)
 	}
 

@@ -622,6 +622,17 @@ func (s *PasswordResetService) applyNewPassword(ctx context.Context, user domain
 
 	sessionsRevoked := 0
 	tokensRevoked := 0
+	versionsBumped := 0
+
+	if s.sessionManager != nil {
+		if bumped, bumpErr := s.sessionManager.BumpActiveSessionVersions(ctx, user.ID, reason); bumpErr != nil {
+			if !errors.Is(bumpErr, ErrSessionNotFound) {
+				s.logger.Warn("bump session versions failed", zap.String("user_id", user.ID), zap.Error(bumpErr))
+			}
+		} else {
+			versionsBumped = bumped
+		}
+	}
 
 	if s.sessionManager != nil {
 		revoked, tokenCount, err := s.sessionManager.RevokeAllSessions(ctx, user.ID, reason, changedBy)
@@ -635,6 +646,13 @@ func (s *PasswordResetService) applyNewPassword(ctx context.Context, user domain
 
 	updatedUser := user
 	updatedUser.LastPasswordChange = changedAt
+
+	if versionsBumped > 0 {
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata["session_versions_bumped"] = versionsBumped
+	}
 
 	s.publishPasswordChangedEvent(ctx, updatedUser, changedBy, changedAt, sessionsRevoked, tokensRevoked, metadata)
 

@@ -47,6 +47,22 @@ services:
       timeout: 3s
       retries: 5
 
+  # pgAdmin for PostgreSQL administration
+  pgadmin:
+    image: dpage/pgadmin4:8.6
+    container_name: iam-pgadmin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin123}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
   # Zookeeper for Kafka (T016 - optional for local dev)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -126,3 +142,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  pgadmin-data:

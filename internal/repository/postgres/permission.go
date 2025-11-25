@@ -19,6 +19,7 @@ import (
 // PermissionRepository implements port.PermissionRepository over PostgreSQL.
 type PermissionRepository struct {
 	pool    *pgxpool.Pool
+	exec    pgExecutor
 	builder squirrel.StatementBuilderType
 }
 
@@ -26,7 +27,20 @@ type PermissionRepository struct {
 func NewPermissionRepository(pool *pgxpool.Pool) *PermissionRepository {
 	return &PermissionRepository{
 		pool:    pool,
+		exec:    pool,
 		builder: squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar),
+	}
+}
+
+// WithTx returns a repository configured to execute within the supplied transaction.
+func (r *PermissionRepository) WithTx(tx pgx.Tx) *PermissionRepository {
+	if tx == nil {
+		return r
+	}
+	return &PermissionRepository{
+		pool:    r.pool,
+		exec:    tx,
+		builder: r.builder,
 	}
 }
 
@@ -40,7 +54,7 @@ func (r *PermissionRepository) Create(ctx context.Context, permission domain.Per
 		return fmt.Errorf("build insert permission sql: %w", err)
 	}
 
-	if _, err := r.pool.Exec(ctx, stmt, args...); err != nil {
+	if _, err := r.exec.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("insert permission: %w", err)
 	}
 
@@ -64,7 +78,7 @@ func (r *PermissionRepository) GetByID(ctx context.Context, id string) (*domain.
 		return nil, fmt.Errorf("build select permission by id sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	permission, err := scanPermissionRow(func(dest ...any) error { return row.Scan(dest...) })
 	if err != nil {
@@ -94,7 +108,7 @@ func (r *PermissionRepository) GetByName(ctx context.Context, name string) (*dom
 		return nil, fmt.Errorf("build select permission by name sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	permission, err := scanPermissionRow(func(dest ...any) error { return row.Scan(dest...) })
 	if err != nil {
@@ -120,7 +134,7 @@ func (r *PermissionRepository) Update(ctx context.Context, permission domain.Per
 		return fmt.Errorf("build update permission sql: %w", err)
 	}
 
-	res, err := r.pool.Exec(ctx, stmt, args...)
+	res, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update permission: %w", err)
 	}
@@ -141,7 +155,7 @@ func (r *PermissionRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("build delete permission sql: %w", err)
 	}
 
-	res, err := r.pool.Exec(ctx, stmt, args...)
+	res, err := r.exec.Exec(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("delete permission: %w", err)
 	}
@@ -182,7 +196,7 @@ func (r *PermissionRepository) List(ctx context.Context, filter port.PermissionF
 		return nil, fmt.Errorf("build list permissions sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query permissions: %w", err)
 	}
@@ -218,7 +232,7 @@ func (r *PermissionRepository) Count(ctx context.Context, filter port.Permission
 		return 0, fmt.Errorf("build count permissions sql: %w", err)
 	}
 
-	row := r.pool.QueryRow(ctx, stmt, args...)
+	row := r.exec.QueryRow(ctx, stmt, args...)
 
 	var count int64
 	if err := row.Scan(&count); err != nil {
@@ -242,7 +256,7 @@ func (r *PermissionRepository) ListNamespaces(ctx context.Context) ([]port.Permi
 		return nil, fmt.Errorf("build list namespaces sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query permission namespaces: %w", err)
 	}
@@ -282,7 +296,7 @@ func (r *PermissionRepository) ListByRole(ctx context.Context, roleID string) ([
 		return nil, fmt.Errorf("build permissions by role sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query permissions by role: %w", err)
 	}
@@ -323,7 +337,7 @@ func (r *PermissionRepository) ListByUser(ctx context.Context, userID string) ([
 		return nil, fmt.Errorf("build permissions by user sql: %w", err)
 	}
 
-	rows, err := r.pool.Query(ctx, stmt, args...)
+	rows, err := r.exec.Query(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query permissions by user: %w", err)
 	}

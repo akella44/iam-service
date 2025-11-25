@@ -113,10 +113,14 @@ func handleTokenRefresh(c *gin.Context, auth *usecase.AuthService) {
 
 	accessToken, newRefreshToken, user, roles, err := auth.RefreshAccessToken(c.Request.Context(), req.RefreshToken)
 	if err != nil {
+		var versionErr *usecase.SessionVersionMismatchError
+		if errors.As(err, &versionErr) {
+			respondStaleRefreshToken(c, versionErr)
+			return
+		}
 		cases := []ErrorCase{
 			{Err: usecase.ErrInvalidRefreshToken, Status: http.StatusUnauthorized, Message: "invalid refresh token"},
 			{Err: usecase.ErrExpiredRefreshToken, Status: http.StatusUnauthorized, Message: "refresh token expired"},
-			{Err: usecase.ErrStaleRefreshToken, Status: http.StatusUnauthorized, Message: "refresh token stale", ProblemType: "iam/token-stale", ProblemTitle: "Refresh Token Stale", ProblemDetail: "refresh token is stale; re-authentication required"},
 			{Err: usecase.ErrInactiveAccount, Status: http.StatusForbidden, Message: "account inactive"},
 			{Err: usecase.ErrAccountPending, Status: http.StatusConflict, Message: "account pending verification"},
 			{Err: usecase.ErrRefreshTokenUnavailable, Status: http.StatusServiceUnavailable, Message: "refresh tokens unavailable"},
@@ -270,6 +274,33 @@ func (h *AuthHandler) respondLoginError(c *gin.Context, err error) {
 	default:
 		c.JSON(http.StatusInternalServerError, NewErrorResponse(c, "authentication failed"))
 	}
+}
+
+func respondStaleRefreshToken(c *gin.Context, details *usecase.SessionVersionMismatchError) {
+	if c == nil {
+		return
+	}
+
+	instance := c.FullPath()
+	if instance == "" {
+		instance = c.Request.URL.Path
+	}
+
+	problem := middleware.ProblemDetails{
+		Type:     "iam/token-stale",
+		Title:    "Refresh Token Stale",
+		Status:   http.StatusUnauthorized,
+		Detail:   "refresh token is stale; re-authentication required",
+		Instance: instance,
+		TraceID:  middleware.GetTraceID(c),
+		Extensions: map[string]any{
+			"session_id":      strings.TrimSpace(details.SessionID),
+			"token_version":   details.TokenVersion,
+			"session_version": details.CurrentVersion,
+		},
+	}
+
+	c.JSON(http.StatusUnauthorized, problem)
 }
 
 func respondRateLimitExceeded(c *gin.Context, rateErr *usecase.RateLimitExceededError) {

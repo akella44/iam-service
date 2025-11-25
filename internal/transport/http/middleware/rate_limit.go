@@ -55,13 +55,14 @@ type ruleResult struct {
 
 // ProblemDetails represents an RFC 9457 compatible error payload for rate limits.
 type ProblemDetails struct {
-	Type       string `json:"type"`
-	Title      string `json:"title"`
-	Status     int    `json:"status"`
-	Detail     string `json:"detail"`
-	Instance   string `json:"instance"`
-	RetryAfter int    `json:"retry_after"`
-	TraceID    string `json:"trace_id,omitempty"`
+	Type       string         `json:"type"`
+	Title      string         `json:"title"`
+	Status     int            `json:"status"`
+	Detail     string         `json:"detail"`
+	Instance   string         `json:"instance"`
+	RetryAfter int            `json:"retry_after"`
+	TraceID    string         `json:"trace_id,omitempty"`
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 // NewRateLimiter builds a reusable rate limiter middleware helper.

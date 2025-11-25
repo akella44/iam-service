@@ -29,7 +29,7 @@ migrate-up:
 	migrate -path migrations -database "postgres://$${DB_USER}:$${DB_PASSWORD}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=$${DB_SSL_MODE}" up
 
 migrate-down:
-	migrate -path migrations -database "postgres://$${DB_USER}:$${DB_PASSWORD}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}?sslmode=$${DB_SSL_MODE}" down
+	docker exec -i iam-postgres psql -U $${POSTGRES_USER:-iam} -d $${POSTGRES_DB:-iam} -v ON_ERROR_STOP=1 < migrations/0001_init.down.sql
 
 # Initialize database (run migrations directly via psql)
 db-init:

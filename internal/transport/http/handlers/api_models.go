@@ -88,6 +88,22 @@ type TokenRefreshResponse struct {
 	User         *UserSummary `json:"user,omitempty"`
 }
 
+// SubjectVersionBumpRequest captures subject version mutation payloads.
+type SubjectVersionBumpRequest struct {
+	NewVersion *int64  `json:"new_version,omitempty"`
+	NotBefore  *string `json:"not_before,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Actor      string  `json:"actor,omitempty"`
+}
+
+// SubjectVersionBumpResponse describes the outcome of a subject version mutation.
+type SubjectVersionBumpResponse struct {
+	SubjectID    string     `json:"subject_id"`
+	NewVersion   int64      `json:"new_version"`
+	NotBefore    *time.Time `json:"not_before,omitempty"`
+	PropagatedAt time.Time  `json:"propagated_at"`
+}
+
 // RegistrationRequest defines the account registration payload.
 type RegistrationRequest struct {
 	Username string `json:"username" binding:"required"`
@@ -219,9 +235,8 @@ type SessionListResponse struct {
 
 // SessionBulkRevokeResponse summarises bulk revocation operations.
 type SessionBulkRevokeResponse struct {
-	RevokedCount  int    `json:"revoked_count"`
-	TokensRevoked int    `json:"tokens_revoked,omitempty"`
-	Message       string `json:"message,omitempty"`
+	RevokedCount  int `json:"revoked_count"`
+	TokensRevoked int `json:"tokens_revoked,omitempty"`
 }
 
 // SessionRevokeRequest contains the session revocation payload.

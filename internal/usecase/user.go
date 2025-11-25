@@ -43,6 +43,7 @@ type UserService struct {
 	roles             port.RoleRepository
 	events            port.EventPublisher
 	passwordValidator *security.PasswordValidator
+	sessionManager    *SessionService
 }
 
 // NewUserService constructs UserService.
@@ -63,6 +64,29 @@ func NewUserService(
 		events:            events,
 		passwordValidator: validator,
 	}
+}
+
+// WithSessionService wires the session manager used for version bumps on administrative actions.
+func (s *UserService) WithSessionService(manager *SessionService) *UserService {
+	s.sessionManager = manager
+	return s
+}
+
+func (s *UserService) bumpUserSessions(ctx context.Context, userID, reason string) error {
+	if s.sessionManager == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(userID)
+	if trimmed == "" {
+		return nil
+	}
+	if _, err := s.sessionManager.BumpActiveSessionVersions(ctx, trimmed, reason); err != nil {
+		if errors.Is(err, ErrSessionNotFound) {
+			return nil
+		}
+		return fmt.Errorf("bump session versions for user %s: %w", trimmed, err)
+	}
+	return nil
 }
 
 // CreateUser persists a new user.
@@ -319,6 +343,7 @@ func (s *UserService) UpdateUser(ctx context.Context, actorID string, input Upda
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	originalStatus := user.Status
 
 	// Update fields if provided
 	if input.Username != nil {
@@ -343,6 +368,12 @@ func (s *UserService) UpdateUser(ctx context.Context, actorID string, input Upda
 
 	if err := s.users.Update(ctx, *user); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	if originalStatus != domain.UserStatusDisabled && user.Status == domain.UserStatusDisabled {
+		if err := s.bumpUserSessions(ctx, user.ID, sessionReasonUserDisabled); err != nil {
+			return nil, err
+		}
 	}
 
 	return user, nil
@@ -382,6 +413,10 @@ func (s *UserService) DeleteUser(ctx context.Context, actorID, userID string) er
 
 	if err := s.users.SoftDelete(ctx, userID); err != nil {
 		return fmt.Errorf("delete user: %w", err)
+	}
+
+	if err := s.bumpUserSessions(ctx, userID, sessionReasonUserDisabled); err != nil {
+		return err
 	}
 
 	return nil
@@ -477,32 +512,53 @@ func (s *UserService) AssignRoles(ctx context.Context, actorID string, input Ass
 		return fmt.Errorf("assign roles: %w", err)
 	}
 
-	// Publish RolesAssigned event if event publisher is available
-	if s.events != nil && s.roles != nil && len(uniqueRoleIDs) > 0 {
-		roleAssignments := make([]domain.RoleAssignment, 0, len(uniqueRoleIDs))
+	requiresReauth := false
+	roleAssignments := make([]domain.RoleAssignment, 0, len(uniqueRoleIDs))
+
+	if s.roles != nil && len(uniqueRoleIDs) > 0 {
 		for _, roleID := range uniqueRoleIDs {
 			role, err := s.roles.GetByID(ctx, roleID)
 			if err != nil {
-				// Log error but don't fail the operation
-				continue
+				if errors.Is(err, repository.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("get role %s: %w", roleID, err)
 			}
+
+			if !requiresReauth && s.sessionManager != nil {
+				perms, perr := s.roles.GetRolePermissions(ctx, roleID)
+				if perr != nil {
+					return fmt.Errorf("get role permissions %s: %w", roleID, perr)
+				}
+				if permissionsRequireForcedReauth(perms) {
+					requiresReauth = true
+				}
+			}
+
 			roleAssignments = append(roleAssignments, domain.RoleAssignment{
 				RoleID:   role.ID,
 				RoleName: role.Name,
 			})
 		}
+	}
 
-		if len(roleAssignments) > 0 {
-			event := domain.RolesAssignedEvent{
-				EventID:    uuid.NewString(),
-				UserID:     userID,
-				RolesAdded: roleAssignments,
-				AssignedBy: actorID,
-				AssignedAt: time.Now().UTC(),
-			}
+	// Publish RolesAssigned event if event publisher is available
+	if s.events != nil && len(roleAssignments) > 0 {
+		event := domain.RolesAssignedEvent{
+			EventID:    uuid.NewString(),
+			UserID:     userID,
+			RolesAdded: roleAssignments,
+			AssignedBy: actorID,
+			AssignedAt: time.Now().UTC(),
+		}
 
-			// Fire-and-forget: don't fail operation if event publishing fails
-			_ = s.events.PublishRolesAssigned(ctx, event)
+		// Fire-and-forget: don't fail operation if event publishing fails
+		_ = s.events.PublishRolesAssigned(ctx, event)
+	}
+
+	if requiresReauth {
+		if err := s.bumpUserSessions(ctx, userID, sessionReasonElevatedPermissions); err != nil {
+			return err
 		}
 	}
 
@@ -572,34 +628,40 @@ func (s *UserService) RevokeRoles(ctx context.Context, actorID string, input Rev
 		return fmt.Errorf("revoke roles: %w", err)
 	}
 
-	// Publish RolesRevoked event if event publisher is available
-	if s.events != nil && s.roles != nil && len(uniqueRoleIDs) > 0 {
-		roleAssignments := make([]domain.RoleAssignment, 0, len(uniqueRoleIDs))
+	roleAssignments := make([]domain.RoleAssignment, 0, len(uniqueRoleIDs))
+	if s.roles != nil && len(uniqueRoleIDs) > 0 {
 		for _, roleID := range uniqueRoleIDs {
 			role, err := s.roles.GetByID(ctx, roleID)
 			if err != nil {
-				// Log error but don't fail the operation
-				continue
+				if errors.Is(err, repository.ErrNotFound) {
+					continue
+				}
+				return fmt.Errorf("get role %s: %w", roleID, err)
 			}
 			roleAssignments = append(roleAssignments, domain.RoleAssignment{
 				RoleID:   role.ID,
 				RoleName: role.Name,
 			})
 		}
+	}
 
-		if len(roleAssignments) > 0 {
-			event := domain.RolesRevokedEvent{
-				EventID:      uuid.NewString(),
-				UserID:       userID,
-				RolesRemoved: roleAssignments,
-				RevokedBy:    actorID,
-				RevokedAt:    time.Now().UTC(),
-				Reason:       "admin_action",
-			}
+	if err := s.bumpUserSessions(ctx, userID, sessionReasonRolesRevoked); err != nil {
+		return err
+	}
 
-			// Fire-and-forget: don't fail operation if event publishing fails
-			_ = s.events.PublishRolesRevoked(ctx, event)
+	// Publish RolesRevoked event if event publisher is available
+	if s.events != nil && len(roleAssignments) > 0 {
+		event := domain.RolesRevokedEvent{
+			EventID:      uuid.NewString(),
+			UserID:       userID,
+			RolesRemoved: roleAssignments,
+			RevokedBy:    actorID,
+			RevokedAt:    time.Now().UTC(),
+			Reason:       "admin_action",
 		}
+
+		// Fire-and-forget: don't fail operation if event publishing fails
+		_ = s.events.PublishRolesRevoked(ctx, event)
 	}
 
 	return nil

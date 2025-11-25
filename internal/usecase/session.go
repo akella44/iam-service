@@ -133,6 +133,7 @@ func (s *SessionService) GetSession(ctx context.Context, userID, sessionID strin
 
 // RevokeSession terminates a specific session owned by the user.
 func (s *SessionService) RevokeSession(ctx context.Context, userID, sessionID, reason, revokedBy string) (*domain.Session, int, error) {
+	reason = chooseRevocationReason(reason, "user_logout")
 	session, err := s.GetSession(ctx, userID, sessionID)
 	if err != nil {
 		return nil, 0, err
@@ -143,6 +144,7 @@ func (s *SessionService) RevokeSession(ctx context.Context, userID, sessionID, r
 
 // RevokeByID terminates the session without enforcing ownership checks.
 func (s *SessionService) RevokeByID(ctx context.Context, sessionID, reason, revokedBy string) (*domain.Session, int, error) {
+	reason = chooseRevocationReason(reason, "manual_revoke")
 	session, err := s.fetchSession(ctx, sessionID)
 	if err != nil {
 		return nil, 0, err
@@ -160,6 +162,7 @@ func (s *SessionService) RevokeAllSessions(ctx context.Context, userID, reason, 
 		return 0, 0, fmt.Errorf("session repository not configured")
 	}
 
+	reason = chooseRevocationReason(reason, "logout_all")
 	sessions, err := s.sessions.ListByUser(ctx, userID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list sessions: %w", err)
@@ -194,6 +197,7 @@ func (s *SessionService) RevokeAllExceptCurrent(ctx context.Context, userID, cur
 		return 0, 0, fmt.Errorf("current session id is required")
 	}
 
+	reason = chooseRevocationReason(reason, "logout_other_sessions")
 	sessions, err := s.sessions.ListByUser(ctx, userID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list sessions: %w", err)
@@ -230,6 +234,122 @@ func (s *SessionService) RevokeAllExceptCurrent(ctx context.Context, userID, cur
 	}
 
 	return revokedCount, tokensRevoked, nil
+}
+
+// BumpSessionVersion increments the session version and emits a Kafka event describing the change.
+func (s *SessionService) BumpSessionVersion(ctx context.Context, session *domain.Session, reason string, metadata map[string]any) (int64, error) {
+	if session == nil {
+		return 0, fmt.Errorf("session is required")
+	}
+
+	sessionID := strings.TrimSpace(session.ID)
+	if sessionID == "" {
+		return 0, fmt.Errorf("session id is required")
+	}
+
+	version, normalizedReason, err := s.bumpSessionVersionInternal(ctx, sessionID, reason)
+	if err != nil {
+		return 0, err
+	}
+
+	if version > 0 && session.Version < version {
+		session.Version = version
+	}
+
+	s.resolveSessionVersion(ctx, session)
+
+	if s.events != nil {
+		eventMetadata := metadataCopy(metadata)
+
+		addMeta := func(key, value string) {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return
+			}
+			if eventMetadata == nil {
+				eventMetadata = make(map[string]any)
+			}
+			eventMetadata[key] = value
+		}
+
+		if session.FamilyID != "" {
+			addMeta("family_id", session.FamilyID)
+		}
+		if session.DeviceID != nil {
+			addMeta("device_id", *session.DeviceID)
+		}
+		if session.DeviceLabel != nil {
+			addMeta("device_label", *session.DeviceLabel)
+		}
+		if session.IPLast != nil {
+			addMeta("ip", *session.IPLast)
+		}
+		if session.UserAgent != nil {
+			addMeta("user_agent", *session.UserAgent)
+		}
+
+		if len(eventMetadata) == 0 {
+			eventMetadata = nil
+		}
+
+		publish := domain.SessionVersionBumpedEvent{
+			EventID:   uuid.NewString(),
+			SessionID: sessionID,
+			UserID:    session.UserID,
+			Version:   version,
+			Reason:    normalizedReason,
+			BumpedAt:  s.now(),
+			Metadata:  eventMetadata,
+		}
+
+		if err := s.events.PublishSessionVersionBumped(ctx, publish); err != nil {
+			return version, fmt.Errorf("publish session version bumped: %w", err)
+		}
+	}
+
+	return version, nil
+}
+
+// BumpActiveSessionVersions increments the version counter for all active sessions owned by the user.
+// This is typically invoked before issuing new credentials so that any outstanding tokens tied to the
+// previous version are treated as stale.
+func (s *SessionService) BumpActiveSessionVersions(ctx context.Context, userID, reason string) (int, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return 0, fmt.Errorf("user id is required")
+	}
+	if s.sessions == nil {
+		return 0, fmt.Errorf("session repository not configured")
+	}
+
+	sessions, err := s.sessions.ListByUser(ctx, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return 0, ErrSessionNotFound
+		}
+		return 0, fmt.Errorf("list sessions: %w", err)
+	}
+
+	bumped := 0
+	now := s.now()
+
+	for i := range sessions {
+		session := sessions[i]
+		s.resolveSessionVersion(ctx, &session)
+		if !session.IsActive(now) {
+			continue
+		}
+		if _, bumpErr := s.BumpSessionVersion(ctx, &session, reason, nil); bumpErr != nil {
+			if errors.Is(bumpErr, ErrSessionNotFound) || errors.Is(bumpErr, repository.ErrNotFound) {
+				continue
+			}
+			s.logger.Warn("pre-issue session version bump failed", zap.String("session_id", session.ID), zap.Error(bumpErr))
+			continue
+		}
+		bumped++
+	}
+
+	return bumped, nil
 }
 
 func (s *SessionService) fetchSession(ctx context.Context, sessionID string) (*domain.Session, error) {
@@ -278,10 +398,22 @@ func (s *SessionService) revoke(ctx context.Context, session *domain.Session, re
 	}
 
 	updatedVersion := updated.Version
-	if version, bumpErr := s.bumpSessionVersion(ctx, session.ID, reason); bumpErr != nil {
-		s.logger.Warn("bump session version failed", zap.String("session_id", session.ID), zap.Error(bumpErr))
-	} else if version > 0 {
-		updatedVersion = version
+	targetSession := updated
+	if targetSession == nil {
+		targetSession = session
+	}
+	bumpMetadata := map[string]any{
+		"trigger": "session.revoked",
+	}
+	if revokedBy != "" {
+		bumpMetadata["revoked_by"] = revokedBy
+	}
+	if targetSession != nil {
+		if version, bumpErr := s.BumpSessionVersion(ctx, targetSession, reason, bumpMetadata); bumpErr != nil {
+			s.logger.Warn("bump session version failed", zap.String("session_id", session.ID), zap.Error(bumpErr))
+		} else if version > 0 {
+			updatedVersion = version
+		}
 	}
 	if updatedVersion > 0 {
 		updated.Version = updatedVersion
@@ -420,24 +552,32 @@ func (s *SessionService) resolveSessionVersion(ctx context.Context, session *dom
 	}
 }
 
-func (s *SessionService) bumpSessionVersion(ctx context.Context, sessionID, reason string) (int64, error) {
+func (s *SessionService) bumpSessionVersionInternal(ctx context.Context, sessionID, reason string) (int64, string, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return 0, fmt.Errorf("session id is required")
+		return 0, "", fmt.Errorf("session id is required")
 	}
 	if s.sessions == nil {
-		return 0, fmt.Errorf("session repository not configured")
+		return 0, "", fmt.Errorf("session repository not configured")
 	}
-	normalized := strings.TrimSpace(reason)
-	if normalized == "" {
-		normalized = "session_version_bump"
-	}
+	normalized := normalizeVersionBumpReason(reason)
 	version, err := s.sessions.IncrementVersion(ctx, sessionID, normalized)
 	if err != nil {
-		return 0, err
+		if errors.Is(err, repository.ErrNotFound) {
+			return 0, "", ErrSessionNotFound
+		}
+		return 0, "", err
 	}
 	s.cacheSessionVersion(ctx, sessionID, version)
-	return version, nil
+	return version, normalized, nil
+}
+
+func chooseRevocationReason(reason, fallback string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func normalizeRevocationReason(reason string) string {
@@ -446,4 +586,17 @@ func normalizeRevocationReason(reason string) string {
 		return "user_action"
 	}
 	return strings.ReplaceAll(trimmed, " ", "_")
+}
+
+func normalizeVersionBumpReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return "session_version_bump"
+	}
+	lowered := strings.ToLower(trimmed)
+	normalized := strings.ReplaceAll(lowered, " ", "_")
+	if normalized == "" {
+		return "session_version_bump"
+	}
+	return normalized
 }

@@ -85,8 +85,43 @@ func (j AccessTokenJTI) IsExpired(at time.Time) bool {
 // RevokedAccessTokenJTI models a blacklisted access token identifier.
 type RevokedAccessTokenJTI struct {
 	JTI       string
+	SubjectID string
+	SessionID *string
 	RevokedAt time.Time
+	ExpiresAt time.Time
 	Reason    *string
+	Actor     string
+	Metadata  map[string]any
+}
+
+// TokenRevocation captures immutable metadata for a revoked access token.
+type TokenRevocation struct {
+	RevocationID string
+	JTI          string
+	SubjectID    string
+	SessionID    *string
+	ExpiresAt    time.Time
+	Reason       string
+	Actor        string
+	IssuedBy     string
+	CreatedAt    time.Time
+	Metadata     map[string]any
+}
+
+// IsExpired reports whether the revocation is no longer active.
+func (r TokenRevocation) IsExpired(at time.Time) bool {
+	if r.ExpiresAt.IsZero() {
+		return false
+	}
+	return !r.ExpiresAt.After(at)
+}
+
+// JTIDenylistSnapshot persists a serialised view of active denylist entries.
+type JTIDenylistSnapshot struct {
+	SnapshotID  string
+	GeneratedAt time.Time
+	Payload     []byte
+	Checksum    string
 }
 
 // VerificationToken represents email/phone verification artifacts.

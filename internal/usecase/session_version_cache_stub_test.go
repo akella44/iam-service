@@ -13,7 +13,8 @@ type stubSessionVersionCache struct {
 		version   int64
 		ttl       time.Duration
 	}
-	values map[string]int64
+	values   map[string]int64
+	getCalls int
 }
 
 func (s *stubSessionVersionCache) GetSessionVersion(_ context.Context, sessionID string) (int64, error) {
@@ -21,6 +22,7 @@ func (s *stubSessionVersionCache) GetSessionVersion(_ context.Context, sessionID
 		return 0, repository.ErrNotFound
 	}
 	if value, ok := s.values[sessionID]; ok {
+		s.getCalls++
 		return value, nil
 	}
 	return 0, repository.ErrNotFound

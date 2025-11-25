@@ -18,16 +18,16 @@ SET description = EXCLUDED.description;
 -- Base permissions (namespace + action)
 INSERT INTO permissions (id, name, service_namespace, action, description)
 VALUES
-    ('33333333-0000-0000-0000-000000000001', 'iam:manage_users', 'iam', 'manage_users', 'Create, update, and deactivate user accounts'),
-    ('33333333-0000-0000-0000-000000000002', 'iam:view_users', 'iam', 'view_users', 'View user directory and account details'),
-    ('33333333-0000-0000-0000-000000000003', 'iam:manage_roles', 'iam', 'manage_roles', 'Create roles and assign permissions'),
-    ('33333333-0000-0000-0000-000000000004', 'iam:view_profile', 'iam', 'view_profile', 'View own account details'),
-    ('33333333-0000-0000-0000-000000000101', 'survey:create_survey', 'survey', 'create_survey', 'Create draft surveys for distribution'),
-    ('33333333-0000-0000-0000-000000000102', 'survey:publish_survey', 'survey', 'publish_survey', 'Publish surveys to participants'),
-    ('33333333-0000-0000-0000-000000000103', 'survey:view_survey', 'survey', 'view_survey', 'View survey results and metadata')
+  ('33333333-0000-0000-0000-000000000001', 'iam:manage_users', 'iam', 'manage_users', 'Create, update, and deactivate user accounts'),
+  ('33333333-0000-0000-0000-000000000002', 'iam:view_users', 'iam', 'view_users', 'View user directory and account details'),
+  ('33333333-0000-0000-0000-000000000003', 'iam:manage_roles', 'iam', 'manage_roles', 'Create roles and assign permissions'),
+  ('33333333-0000-0000-0000-000000000004', 'iam:view_profile', 'iam', 'view_profile', 'View own account details'),
+  ('33333333-0000-0000-0000-000000000101', 'survey:create_survey', 'survey', 'create_survey', 'Create draft surveys for distribution'),
+  ('33333333-0000-0000-0000-000000000102', 'survey:publish_survey', 'survey', 'publish_survey', 'Publish surveys to participants'),
+  ('33333333-0000-0000-0000-000000000103', 'survey:view_survey', 'survey', 'view_survey', 'View survey results and metadata')
 ON CONFLICT (service_namespace, action) DO UPDATE
 SET name = EXCLUDED.name,
-    description = EXCLUDED.description;
+  description = EXCLUDED.description;
 
 -- Role assignments
 INSERT INTO role_permissions (role_id, permission_id)
@@ -163,6 +163,7 @@ WITH admin_user AS (
 INSERT INTO sessions (
   id,
   user_id,
+  family_id,
   session_version,
   device_id,
   device_label,
@@ -175,7 +176,8 @@ INSERT INTO sessions (
 )
 SELECT '44444444-4444-4444-4444-444444444444',
        u.id,
-     1,
+       '77777777-7777-7777-7777-777777777777',
+       1,
        'dev-laptop',
        'Dev Laptop',
        '192.0.2.10',
@@ -191,43 +193,54 @@ SET device_label = EXCLUDED.device_label,
     user_agent = EXCLUDED.user_agent,
     last_seen = EXCLUDED.last_seen,
     expires_at = EXCLUDED.expires_at,
+    family_id = EXCLUDED.family_id,
     session_version = EXCLUDED.session_version;
 
 -- Issue refresh token bound to the seeded session
 INSERT INTO refresh_tokens (
   id,
   user_id,
+  session_id,
+  family_id,
+  issued_version,
   token_hash,
   client_id,
   ip,
   user_agent,
   created_at,
   expires_at,
-  session_id,
-  family_id,
-  issued_version
+  used_at,
+  revoked_at,
+  metadata
 )
 SELECT '55555555-5555-5555-5555-555555555555',
        s.user_id,
+       s.id,
+       s.family_id,
+       1,
        'dev-refresh-token-hash',
        'dev-cli',
        '192.0.2.10',
        'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)',
        now() - interval '15 minutes',
        now() + interval '30 days',
-       s.id,
-    s.family_id,
-     1
+       NULL,
+       NULL,
+       jsonb_build_object('seed', 'dev')
   FROM sessions s
  WHERE s.id = '44444444-4444-4444-4444-444444444444'
 ON CONFLICT (token_hash) DO UPDATE
 SET expires_at = EXCLUDED.expires_at,
-  session_id = EXCLUDED.session_id,
-  family_id = COALESCE(refresh_tokens.family_id, EXCLUDED.family_id),
-  issued_version = EXCLUDED.issued_version;
+    session_id = EXCLUDED.session_id,
+    family_id = EXCLUDED.family_id,
+    issued_version = EXCLUDED.issued_version,
+    used_at = EXCLUDED.used_at,
+    revoked_at = EXCLUDED.revoked_at,
+    metadata = COALESCE(refresh_tokens.metadata, EXCLUDED.metadata);
 
 UPDATE sessions
-   SET refresh_token_id = rt.id
+   SET refresh_token_id = rt.id,
+       session_version = GREATEST(sessions.session_version, 1)
   FROM refresh_tokens rt
  WHERE sessions.id = '44444444-4444-4444-4444-444444444444'
    AND rt.token_hash = 'dev-refresh-token-hash';
