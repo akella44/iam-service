@@ -156,21 +156,23 @@ type refreshTokenParams struct {
 
 // AuthService coordinates authentication flows.
 type AuthService struct {
-	cfg               *config.AppConfig
-	users             port.UserRepository
-	roles             port.RoleRepository
-	permissions       port.PermissionRepository
-	sessions          port.SessionRepository
-	tokens            port.TokenRepository
-	tokenGenerator    *security.TokenGenerator
-	keyProvider       security.KeyProvider
-	rateLimits        port.RateLimitStore
-	sessionVersions   port.SessionVersionCache
-	sessionVersionTTL time.Duration
-	logger            *zap.Logger
-	now               func() time.Time
-	sessionManager    *SessionService
-	degradationPolicy domain.DegradationPolicy
+	cfg                  *config.AppConfig
+	users                port.UserRepository
+	roles                port.RoleRepository
+	permissions          port.PermissionRepository
+	sessions             port.SessionRepository
+	tokens               port.TokenRepository
+	tokenGenerator       *security.TokenGenerator
+	keyProvider          security.KeyProvider
+	rateLimits           port.RateLimitStore
+	sessionVersions      port.SessionVersionCache
+	sessionVersionTTL    time.Duration
+	sessionRevocations   port.SessionRevocationStore
+	sessionRevocationTTL time.Duration
+	logger               *zap.Logger
+	now                  func() time.Time
+	sessionManager       *SessionService
+	degradationPolicy    domain.DegradationPolicy
 }
 
 // NewAuthService constructs an AuthService instance.
@@ -243,6 +245,18 @@ func (s *AuthService) WithSessionVersionCache(cache port.SessionVersionCache, tt
 	return s
 }
 
+// WithSessionRevocationStore wires the Redis-backed session revocation cache.
+func (s *AuthService) WithSessionRevocationStore(store port.SessionRevocationStore, ttl time.Duration) *AuthService {
+	if store != nil {
+		s.sessionRevocations = store
+		s.sessionRevocationTTL = ttl
+		if s.sessionRevocationTTL <= 0 {
+			s.sessionRevocationTTL = s.estimatedRevocationTTL()
+		}
+	}
+	return s
+}
+
 // Login validates credentials, enforces login protections, and returns session context with tokens.
 func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
 	if err := s.validateLoginInput(input); err != nil {
@@ -279,10 +293,6 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	if err != nil {
 		s.safeRevokeSession(ctx, session.ID, "access_token_failure")
 		return nil, err
-	}
-
-	if err := s.trackAccessToken(ctx, claims, user.ID, session.ID); err != nil {
-		s.logger.Warn("track jwt jti failed", zap.String("session_id", session.ID), zap.Error(err))
 	}
 
 	expiresIn := 0
@@ -344,13 +354,9 @@ func (s *AuthService) Authenticate(ctx context.Context, identifier, password str
 	}
 
 	now := s.now()
-	token, claims, err := s.issueAccessToken(ctx, *user, roles, "", 0, now)
+	token, _, err := s.issueAccessToken(ctx, *user, roles, "", 0, now)
 	if err != nil {
 		return "", domain.User{}, nil, err
-	}
-
-	if err := s.trackAccessToken(ctx, claims, user.ID, ""); err != nil {
-		s.logger.Warn("track access token jti failed", zap.Error(err))
 	}
 
 	return token, *user, roles, nil
@@ -363,13 +369,9 @@ func (s *AuthService) IssueToken(ctx context.Context, user domain.User, roles []
 	}
 
 	userCopy := sanitizeUser(user)
-	token, claims, err := s.issueAccessToken(ctx, userCopy, roles, "", 0, s.now())
+	token, _, err := s.issueAccessToken(ctx, userCopy, roles, "", 0, s.now())
 	if err != nil {
 		return "", err
-	}
-
-	if err := s.trackAccessToken(ctx, claims, userCopy.ID, ""); err != nil {
-		s.logger.Warn("track access token jti failed", zap.Error(err))
 	}
 
 	return token, nil
@@ -437,6 +439,13 @@ func (s *AuthService) validateSessionBinding(ctx context.Context, claims *securi
 		return nil
 	}
 
+	if revoked, err := s.checkSessionRevocation(ctx, sessionID); err != nil {
+		return err
+	} else if revoked {
+		s.logger.Warn("rejecting access token for redis-revoked session", zap.String("session_id", sessionID))
+		return ErrInvalidAccessToken
+	}
+
 	if s.sessions == nil {
 		s.logger.Warn(
 			"session repository missing for session-bound token",
@@ -489,6 +498,22 @@ func (s *AuthService) resolveSessionVersionForToken(ctx context.Context, session
 		ctx = context.Background()
 	}
 
+	if s.sessionVersions != nil {
+		if cached, err := s.sessionVersions.GetSessionVersion(ctx, sessionID); err == nil {
+			if cached > 0 {
+				return cached, nil
+			}
+		} else if errors.Is(err, repository.ErrNotFound) {
+			s.logger.Debug("session version cache miss", zap.String("session_id", sessionID))
+		} else {
+			s.logger.Warn("fetch cached session version failed", zap.String("session_id", sessionID), zap.Error(err))
+			if s.degradationPolicy.AllowsFallback(domain.DegradationReasonCacheStale) {
+				return 0, nil
+			}
+			return 0, fmt.Errorf("fetch cached session version: %w", err)
+		}
+	}
+
 	if s.sessions == nil {
 		if s.degradationPolicy.AllowsFallback(domain.DegradationReasonSessionRepositoryUnavailable) {
 			s.logger.Warn(
@@ -499,16 +524,6 @@ func (s *AuthService) resolveSessionVersionForToken(ctx context.Context, session
 			return 0, nil
 		}
 		return 0, fmt.Errorf("session repository not configured")
-	}
-
-	if s.sessionVersions != nil {
-		if cached, err := s.sessionVersions.GetSessionVersion(ctx, sessionID); err == nil {
-			if cached > 0 {
-				return cached, nil
-			}
-		} else if !errors.Is(err, repository.ErrNotFound) {
-			s.logger.Warn("fetch cached session version failed", zap.String("session_id", sessionID), zap.Error(err))
-		}
 	}
 
 	session, err := s.sessions.Get(ctx, sessionID)
@@ -625,17 +640,28 @@ func (s *AuthService) ListActiveSessions(ctx context.Context, userID string) ([]
 	return active, nil
 }
 
-// RevokeSession revokes a session by identifier with an optional reason.
-func (s *AuthService) RevokeSession(ctx context.Context, sessionID, reason string) error {
+// RevokeSession revokes the caller's session ensuring the session belongs to the supplied user.
+func (s *AuthService) RevokeSession(ctx context.Context, userID, sessionID, reason string) error {
+	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("user id is required")
+	}
+	if reason == "" {
+		reason = "user requested"
+	}
+
 	if s.sessionManager != nil {
-		_, _, err := s.sessionManager.RevokeByID(ctx, sessionID, reason, "")
+		_, _, err := s.sessionManager.RevokeSession(ctx, userID, sessionID, reason, userID)
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrSessionNotFound):
 				return repository.ErrNotFound
+			case errors.Is(err, ErrSessionForbidden):
+				return ErrSessionForbidden
 			case errors.Is(err, ErrSessionAlreadyRevoked):
 				return nil
 			default:
@@ -648,11 +674,22 @@ func (s *AuthService) RevokeSession(ctx context.Context, sessionID, reason strin
 		return fmt.Errorf("session repository not configured")
 	}
 
-	if reason == "" {
-		reason = "user requested"
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.ErrNotFound
+		}
+		return fmt.Errorf("lookup session: %w", err)
+	}
+
+	if !strings.EqualFold(session.UserID, userID) {
+		return ErrSessionForbidden
 	}
 
 	if err := s.sessions.Revoke(ctx, sessionID, reason); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return repository.ErrNotFound
+		}
 		return fmt.Errorf("revoke session: %w", err)
 	}
 
@@ -808,13 +845,9 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		}
 	}
 
-	accessToken, claims, err := s.issueAccessToken(ctx, sanitizedUser, roles, sessionID, sessionVersion, now)
+	accessToken, _, err := s.issueAccessToken(ctx, sanitizedUser, roles, sessionID, sessionVersion, now)
 	if err != nil {
 		return "", "", domain.User{}, nil, err
-	}
-
-	if err := s.trackAccessToken(ctx, claims, sanitizedUser.ID, sessionID); err != nil {
-		s.logger.Warn("track jwt jti failed", zap.String("session_id", sessionID), zap.Error(err))
 	}
 
 	metadata := map[string]any{
@@ -1040,39 +1073,6 @@ func (s *AuthService) issueAccessToken(ctx context.Context, user domain.User, ro
 	return signed, claims, nil
 }
 
-func (s *AuthService) trackAccessToken(ctx context.Context, claims *security.AccessTokenClaims, userID, sessionID string) error {
-	if s.tokens == nil || claims == nil {
-		return nil
-	}
-	if strings.TrimSpace(claims.ID) == "" {
-		return nil
-	}
-
-	issuedAt := s.now()
-	if claims.IssuedAt != nil {
-		issuedAt = claims.IssuedAt.Time
-	}
-	expiresAt := issuedAt
-	if claims.ExpiresAt != nil {
-		expiresAt = claims.ExpiresAt.Time
-	}
-
-	var sessionPtr *string
-	if strings.TrimSpace(sessionID) != "" {
-		sessionPtr = stringPtr(sessionID)
-	}
-
-	record := domain.AccessTokenJTI{
-		JTI:       claims.ID,
-		UserID:    userID,
-		SessionID: sessionPtr,
-		IssuedAt:  issuedAt,
-		ExpiresAt: expiresAt,
-	}
-
-	return s.tokens.TrackJTI(ctx, record)
-}
-
 func (s *AuthService) createSession(ctx context.Context, user domain.User, input LoginInput, now time.Time) (domain.Session, error) {
 	session := domain.Session{
 		ID:        uuid.NewString(),
@@ -1156,6 +1156,26 @@ func (s *AuthService) refreshTTL() time.Duration {
 	return ttl
 }
 
+func (s *AuthService) accessTTL() time.Duration {
+	if s.cfg == nil {
+		return 15 * time.Minute
+	}
+	ttl := s.cfg.JWT.AccessTokenTTL
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	return ttl
+}
+
+func (s *AuthService) estimatedRevocationTTL() time.Duration {
+	refresh := s.refreshTTL()
+	access := s.accessTTL()
+	if refresh > access {
+		return refresh
+	}
+	return access
+}
+
 func (s *AuthService) cacheSessionVersion(ctx context.Context, sessionID string, version int64) {
 	if s.sessionVersions == nil {
 		return
@@ -1169,6 +1189,42 @@ func (s *AuthService) cacheSessionVersion(ctx context.Context, sessionID string,
 	}
 	if err := s.sessionVersions.SetSessionVersion(ctx, sessionID, version, s.sessionVersionTTL); err != nil {
 		s.logger.Warn("cache session version failed", zap.String("session_id", sessionID), zap.Error(err))
+	}
+}
+
+func (s *AuthService) checkSessionRevocation(ctx context.Context, sessionID string) (bool, error) {
+	if s.sessionRevocations == nil {
+		return false, nil
+	}
+	revoked, _, err := s.sessionRevocations.IsSessionRevoked(ctx, sessionID)
+	if err != nil {
+		if s.degradationPolicy.AllowsFallback(domain.DegradationReasonRevocationCacheUnavailable) {
+			s.logger.Warn(
+				"session revocation cache lookup failed; allowing due to degradation policy",
+				zap.String("session_id", sessionID),
+				zap.Error(err),
+			)
+			return false, nil
+		}
+		return false, fmt.Errorf("revocation cache unavailable: %w", err)
+	}
+	return revoked, nil
+}
+
+func (s *AuthService) markSessionRevoked(ctx context.Context, sessionID string, reason string) {
+	if s.sessionRevocations == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	ttl := s.sessionRevocationTTL
+	if ttl <= 0 {
+		ttl = s.estimatedRevocationTTL()
+	}
+	if err := s.sessionRevocations.MarkSessionRevoked(ctx, sessionID, reason, ttl); err != nil {
+		s.logger.Warn("cache session revocation failed", zap.String("session_id", sessionID), zap.Error(err))
 	}
 }
 
@@ -1291,6 +1347,8 @@ func (s *AuthService) safeRevokeSession(ctx context.Context, sessionID, reason s
 	}
 	if err := s.sessions.Revoke(ctx, sessionID, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		s.logger.Warn("rollback session failed", zap.String("session_id", sessionID), zap.Error(err))
+	} else if err == nil {
+		s.markSessionRevoked(ctx, sessionID, reason)
 	}
 }
 
@@ -1311,6 +1369,10 @@ func (s *AuthService) handleRefreshReplay(ctx context.Context, record *domain.Re
 		if _, err := s.tokens.RevokeRefreshTokensByFamily(ctx, record.FamilyID, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
 			s.logger.Warn("revoke family refresh tokens failed", zap.String("family_id", record.FamilyID), zap.Error(err))
 		}
+	}
+
+	if record.SessionID != nil && strings.TrimSpace(*record.SessionID) != "" {
+		s.markSessionRevoked(ctx, strings.TrimSpace(*record.SessionID), reason)
 	}
 }
 

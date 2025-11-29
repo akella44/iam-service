@@ -17,13 +17,12 @@ import (
 
 // ServiceSet groups the services the HTTP layer depends on.
 type ServiceSet struct {
-	Auth            *usecase.AuthService
-	Registration    *usecase.RegistrationService
-	Users           *usecase.UserService
-	Roles           *usecase.RoleService
-	PasswordReset   *usecase.PasswordResetService
-	Sessions        *usecase.SessionService
-	SubjectVersions *usecase.SubjectVersionService
+	Auth          *usecase.AuthService
+	Registration  *usecase.RegistrationService
+	Users         *usecase.UserService
+	Roles         *usecase.RoleService
+	PasswordReset *usecase.PasswordResetService
+	Sessions      *usecase.SessionService
 }
 
 // Dependencies encapsulates the objects required to register routes.
@@ -134,12 +133,6 @@ func Register(deps Dependencies) *gin.Engine {
 			roleHandler.RegisterRoutes(rolesGroup)
 		}
 
-		if deps.Services.SubjectVersions != nil {
-			adminGroup := api.Group("/admin")
-			adminGroup.Use(authMiddleware)
-			subjectHandler := handlers.NewSubjectVersionHandler(deps.Services.SubjectVersions)
-			adminGroup.POST("/subjects/:subjectId/session-version", subjectHandler.BumpSubjectVersion)
-		}
 	}
 
 	handlers.RegisterSwagger(r)

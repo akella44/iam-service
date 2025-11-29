@@ -133,10 +133,6 @@ type passwordResetTokenRepoMock struct {
 	consumeErr                  error
 	revokedRefreshTokensForUser bool
 	revokedRefreshTokensUserID  string
-	revokedJTIsForUser          bool
-	revokedJTIsUserID           string
-	revokedJTIsReason           string
-	jtiRevokeCount              int
 }
 
 func (m *passwordResetTokenRepoMock) CreateVerification(context.Context, domain.VerificationToken) error {
@@ -207,33 +203,6 @@ func (m *passwordResetTokenRepoMock) RevokeRefreshTokensForUser(_ context.Contex
 	m.revokedRefreshTokensForUser = true
 	m.revokedRefreshTokensUserID = userID
 	return nil
-}
-
-func (m *passwordResetTokenRepoMock) TrackJTI(context.Context, domain.AccessTokenJTI) error {
-	return errors.New("unexpected call: TrackJTI")
-}
-
-func (m *passwordResetTokenRepoMock) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return errors.New("unexpected call: RevokeJTI")
-}
-
-func (m *passwordResetTokenRepoMock) RevokeJTIsBySession(context.Context, string, string) (int, error) {
-	return 0, errors.New("unexpected call: RevokeJTIsBySession")
-}
-
-func (m *passwordResetTokenRepoMock) RevokeJTIsForUser(_ context.Context, userID string, reason string) (int, error) {
-	m.revokedJTIsForUser = true
-	m.revokedJTIsUserID = userID
-	m.revokedJTIsReason = reason
-	return m.jtiRevokeCount, nil
-}
-
-func (m *passwordResetTokenRepoMock) IsJTIRevoked(context.Context, string) (bool, error) {
-	return false, errors.New("unexpected call: IsJTIRevoked")
-}
-
-func (m *passwordResetTokenRepoMock) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
-	return 0, errors.New("unexpected call: CleanupExpiredJTIs")
 }
 
 func (m *passwordResetTokenRepoMock) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {

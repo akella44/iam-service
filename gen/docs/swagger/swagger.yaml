@@ -328,28 +328,6 @@ definitions:
       valid:
         type: boolean
     type: object
-  handlers.SubjectVersionBumpRequest:
-    properties:
-      actor:
-        type: string
-      new_version:
-        type: integer
-      not_before:
-        type: string
-      reason:
-        type: string
-    type: object
-  handlers.SubjectVersionBumpResponse:
-    properties:
-      new_version:
-        type: integer
-      not_before:
-        type: string
-      propagated_at:
-        type: string
-      subject_id:
-        type: string
-    type: object
   handlers.TokenRefreshRequest:
     properties:
       refresh_token:
@@ -410,61 +388,6 @@ definitions:
 info:
   contact: {}
 paths:
-  /api/v1/admin/subjects/{subjectId}/session-version:
-    post:
-      consumes:
-      - application/json
-      description: Increments a subject's session version or adjusts the not-before
-        timestamp for revocation workflows.
-      parameters:
-      - description: Bearer access token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Subject identifier
-        in: path
-        name: subjectId
-        required: true
-        type: string
-      - description: Subject version bump request
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.SubjectVersionBumpRequest'
-      produces:
-      - application/json
-      responses:
-        "202":
-          description: Accepted
-          schema:
-            $ref: '#/definitions/handlers.SubjectVersionBumpResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      security:
-      - Bearer: []
-      summary: Bump a subject session version
-      tags:
-      - Subjects
   /api/v1/auth/login:
     post:
       consumes:
@@ -516,6 +439,12 @@ paths:
     post:
       description: Revokes the caller's active session using the access token's session
         context.
+      parameters:
+      - description: Bearer access token
+        in: header
+        name: Authorization
+        required: true
+        type: string
       produces:
       - application/json
       responses:
@@ -527,10 +456,16 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - Bearer: []
       summary: Logout the current session
       tags:
       - Authentication

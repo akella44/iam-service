@@ -26,13 +26,15 @@ var (
 
 // SessionService coordinates session listing and revocation workflows.
 type SessionService struct {
-	sessions     port.SessionRepository
-	tokens       port.TokenRepository
-	events       port.EventPublisher
-	logger       *zap.Logger
-	versionCache port.SessionVersionCache
-	versionTTL   time.Duration
-	now          func() time.Time
+	sessions      port.SessionRepository
+	tokens        port.TokenRepository
+	events        port.EventPublisher
+	logger        *zap.Logger
+	versionCache  port.SessionVersionCache
+	versionTTL    time.Duration
+	revocations   port.SessionRevocationStore
+	revocationTTL time.Duration
+	now           func() time.Time
 }
 
 // NewSessionService constructs a SessionService.
@@ -66,6 +68,18 @@ func (s *SessionService) WithSessionVersionCache(cache port.SessionVersionCache,
 		}
 		if s.versionTTL <= 0 {
 			s.versionTTL = 10 * time.Minute
+		}
+	}
+	return s
+}
+
+// WithSessionRevocationStore wires the session revocation cache for Redis-backed checks.
+func (s *SessionService) WithSessionRevocationStore(store port.SessionRevocationStore, ttl time.Duration) *SessionService {
+	if store != nil {
+		s.revocations = store
+		s.revocationTTL = ttl
+		if s.revocationTTL <= 0 {
+			s.revocationTTL = 24 * time.Hour
 		}
 	}
 	return s
@@ -391,6 +405,8 @@ func (s *SessionService) revoke(ctx context.Context, session *domain.Session, re
 		return nil, 0, fmt.Errorf("revoke session: %w", err)
 	}
 
+	s.markSessionRevoked(ctx, session.ID, reason)
+
 	updated, err := s.sessions.Get(ctx, session.ID)
 	if err != nil {
 		s.logger.Warn("reload session after revoke failed", zap.String("session_id", session.ID), zap.Error(err))
@@ -533,6 +549,23 @@ func (s *SessionService) cacheSessionVersion(ctx context.Context, sessionID stri
 	}
 	if err := s.versionCache.SetSessionVersion(ctx, sessionID, version, ttl); err != nil {
 		s.logger.Warn("cache session version failed", zap.String("session_id", sessionID), zap.Error(err))
+	}
+}
+
+func (s *SessionService) markSessionRevoked(ctx context.Context, sessionID string, reason string) {
+	if s.revocations == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	ttl := s.revocationTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	if err := s.revocations.MarkSessionRevoked(ctx, sessionID, reason, ttl); err != nil {
+		s.logger.Warn("cache session revocation failed", zap.String("session_id", sessionID), zap.Error(err))
 	}
 }
 

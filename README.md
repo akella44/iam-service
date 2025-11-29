@@ -39,6 +39,10 @@ REDIS_PORT=6379
 REDIS_DB=0
 REDIS_PASSWORD=
 REDIS_TLS=false
+REDIS_SESSION_VERSION_PREFIX=iam:session_version
+REDIS_SESSION_VERSION_TTL=10m
+REDIS_SESSION_REVOCATION_PREFIX=iam:sess:revoked
+REDIS_SESSION_REVOCATION_TTL=24h
 
 # Kafka
 KAFKA_BROKERS=kafka:29092
@@ -73,15 +77,6 @@ JWT_REFRESH_TOKEN_TTL=168h
 
 # Revocation
 REVOCATION_DEGRADATION_POLICY=lenient
-REVOCATION_CACHE_WARMUP_GRACE_PERIOD=15s
-REVOCATION_CACHE_STALE_TTL=30s
-REVOCATION_CACHE_SUBJECT_VERSION_TTL=2m
-REVOCATION_CACHE_DENYLIST_SNAPSHOT_TTL=5m
-REVOCATION_BLOOM_WINDOW_DURATION=60s
-REVOCATION_BLOOM_WINDOW_COUNT=6
-REVOCATION_BLOOM_FALSE_POSITIVE_RATE=0.001
-REVOCATION_REPLAY_MAX_EVENT_LAG=2s
-REVOCATION_REPLAY_REPLAY_TOLERANCE=5s
 
 # Application
 APP_NAME=iam-service
@@ -138,16 +133,18 @@ Follow this checklist after deploying or changing revocation behaviour:
 	- Call `POST /auth/token/refresh` and confirm a new token pair in the response plus a `refresh_rotated` Kafka event (`iam.refresh_rotated`).
 	- Re-submit the previous refresh token to trigger a `reuse_detected` event and confirm the corresponding audit entry in PostgreSQL (`refresh_audit_log`).
 	- Inspect metrics with `curl http://localhost:8080/metrics | grep iam_http_requests_total` to verify rotation counters increment.
+2. **Access Token Revocation Cache**
+	- Revoke any active session via `DELETE /auth/sessions/{sid}` or the “logout-all” flow and verify Redis now contains `sess:revoked:<sid>` with a TTL approximating the longer of access/refresh lifetimes.
+	- Hit any authenticated HTTP route with the old access token; middleware now validates JWT locally, looks up `sess:revoked:<sid>` in Redis, and should respond with `401` without hitting Postgres.
+	- Clear the Redis key (or wait for TTL expiry) and confirm previously revoked access tokens are rejected only after the refresh rotation forces a new session version, demonstrating the lazy Postgres lookup path is rarely exercised.
+	- The `/api/v1/auth/logout` endpoint enforces `Authorization: Bearer <token>` and returns `401` for unauthenticated calls, so only the user who owns the session (or trusted service acting on their behalf) can trigger logout. Example:
+	```bash
+	curl -i -X POST \
+	  -H "Authorization: Bearer $ACCESS_TOKEN" \
+	  http://localhost:8080/api/v1/auth/logout
+	```
 
-2. **Subject Session Version Bump**
-	- Invoke `POST /admin/subjects/{subjectId}/session-version` (provide `new_version` or `not_before`).
-	- Replay the pre-bump JWT and confirm it is rejected while `iam_subject_version_cache_hits_total` increases relative to misses.
-	- Watch `iam_subject_version_propagation_seconds` (histogram) to ensure p95 ≤ 2s.
 
-3. **Gateway JTI Denylist & Restart Recovery**
-	- Revoke an access token using `POST /admin/tokens/revoke` and expect `iam_jti_revocations_total` to increment.
-	- Restart the gateway (`docker compose restart iam-gateway`) and replay the revoked token to validate immediate 401 responses and snapshot recovery (hit counter increments on `iam_jti_cache_hits_total`).
-	- Monitor `iam_jti_revocation_lag_seconds` for p95 ≤ 1s during the flow.
 
 ### Development seed data
 
@@ -190,11 +187,8 @@ grpcurl -plaintext -d '{"token":"<ACCESS_TOKEN>"}' localhost:50051 iam.v1.TokenV
 ## Observability & Alerting
 
 - Metrics endpoint: `http://<host>:8080/metrics`
-- Critical revocation metrics:
-	- `iam_subject_version_propagation_seconds` — warn at p95 > 1.5s, page at p95 > 2s
-	- `iam_jti_revocation_lag_seconds` — same thresholds as subject version propagation
-	- Cache ratios: compare `iam_subject_version_cache_hits_total` and `iam_jti_cache_hits_total` against their miss counters; investigate if hit ratio < 0.95 for five consecutive minutes
-	- `iam_jti_revocations_total` should align with token revocation audit entries; unexpected spikes trigger incident review
+- Primary counter: `iam_http_requests_total` (labelled by path/method/status) to confirm revocation-related APIs are exercised.
+- Audit trails and Kafka events remain the source of truth for refresh rotation and reuse detection; no dedicated denylist metrics exist after the 2025-11 cleanup.
 - Configure `telemetry.otlp_endpoint` to forward OpenTelemetry traces for outbox publishers and Kafka consumers.
 
 ## Roadmap

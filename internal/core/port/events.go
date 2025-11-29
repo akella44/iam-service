@@ -15,5 +15,4 @@ type EventPublisher interface {
 	PublishRolesRevoked(ctx context.Context, event domain.RolesRevokedEvent) error
 	PublishSessionRevoked(ctx context.Context, event domain.SessionRevokedEvent) error
 	PublishSessionVersionBumped(ctx context.Context, event domain.SessionVersionBumpedEvent) error
-	PublishSubjectVersionBumped(ctx context.Context, event domain.SubjectVersionBumpedEvent) error
 }

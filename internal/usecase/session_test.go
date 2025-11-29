@@ -189,7 +189,6 @@ func (f *fakeSessionRepository) SetVersion(ctx context.Context, sessionID string
 type fakeEventPublisher struct {
 	sessionRevoked       []domain.SessionRevokedEvent
 	sessionVersionBumped []domain.SessionVersionBumpedEvent
-	subjectVersionBumped []domain.SubjectVersionBumpedEvent
 	fail                 error
 }
 
@@ -226,14 +225,6 @@ func (f *fakeEventPublisher) PublishSessionVersionBumped(ctx context.Context, ev
 		return f.fail
 	}
 	f.sessionVersionBumped = append(f.sessionVersionBumped, event)
-	return nil
-}
-
-func (f *fakeEventPublisher) PublishSubjectVersionBumped(ctx context.Context, event domain.SubjectVersionBumpedEvent) error {
-	if f.fail != nil {
-		return f.fail
-	}
-	f.subjectVersionBumped = append(f.subjectVersionBumped, event)
 	return nil
 }
 

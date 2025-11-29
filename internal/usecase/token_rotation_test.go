@@ -175,7 +175,6 @@ type refreshTokenRepository struct {
 	revokedIDs          []string
 	revokedFamilies     []string
 	markedUsed          []string
-	trackedJTIs         []domain.AccessTokenJTI
 	markUsedShouldError bool
 }
 
@@ -239,26 +238,6 @@ func (r *refreshTokenRepository) RevokeRefreshTokensByFamily(_ context.Context, 
 func (r *refreshTokenRepository) RevokeRefreshTokensForUser(context.Context, string) error {
 	return nil
 }
-func (r *refreshTokenRepository) TrackJTI(_ context.Context, record domain.AccessTokenJTI) error {
-	r.trackedJTIs = append(r.trackedJTIs, record)
-	return nil
-}
-func (r *refreshTokenRepository) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return nil
-}
-func (r *refreshTokenRepository) RevokeJTIsBySession(context.Context, string, string) (int, error) {
-	return 0, nil
-}
-func (r *refreshTokenRepository) RevokeJTIsForUser(context.Context, string, string) (int, error) {
-	return 0, nil
-}
-func (r *refreshTokenRepository) IsJTIRevoked(context.Context, string) (bool, error) {
-	return false, nil
-}
-func (r *refreshTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
-	return 0, nil
-}
-
 func (r *refreshTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
 	return nil
 }

@@ -24,10 +24,8 @@ const (
 	DegradationReasonSessionRepositoryUnavailable DegradationReason = "session_repository_unavailable"
 	// DegradationReasonSessionLookupFailure denotes session lookups failed due to infrastructure errors.
 	DegradationReasonSessionLookupFailure DegradationReason = "session_lookup_failure"
-	// DegradationReasonJTICacheUnavailable denotes the JTI denylist cache could not be queried.
-	DegradationReasonJTICacheUnavailable DegradationReason = "jti_cache_unavailable"
-	// DegradationReasonJTICacheMiss denotes the JTI denylist cache did not contain an entry for the token.
-	DegradationReasonJTICacheMiss DegradationReason = "jti_cache_miss"
+	// DegradationReasonRevocationCacheUnavailable denotes redis revocation lookups failed or timed out.
+	DegradationReasonRevocationCacheUnavailable DegradationReason = "revocation_cache_unavailable"
 )
 
 // DegradationPolicy centralises how the service responds when revocation data is missing or stale.

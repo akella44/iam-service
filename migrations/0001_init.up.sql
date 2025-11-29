@@ -157,70 +157,6 @@ CREATE TABLE IF NOT EXISTS verification_tokens (
   CONSTRAINT chk_verify_times CHECK (expires_at > created_at)
 );
 
-CREATE TABLE IF NOT EXISTS access_token_jti (
-  jti         TEXT PRIMARY KEY,
-  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  session_id  UUID REFERENCES sessions(id) ON DELETE CASCADE,
-  issued_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at  TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS revoked_access_token_jti (
-  jti        TEXT PRIMARY KEY,
-  revoked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  reason     TEXT
-);
-
--- ========================================================================
--- Subject version tracking
--- ========================================================================
-
-CREATE TABLE IF NOT EXISTS subject_versions (
-  subject_id UUID PRIMARY KEY,
-  current_version BIGINT NOT NULL DEFAULT 1,
-  not_before TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_by TEXT NOT NULL,
-  reason TEXT,
-  CONSTRAINT subject_versions_positive_version CHECK (current_version >= 1)
-);
-
-CREATE TABLE IF NOT EXISTS subject_version_audit (
-  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  subject_id UUID NOT NULL,
-  previous_version BIGINT,
-  new_version BIGINT NOT NULL,
-  previous_not_before TIMESTAMPTZ,
-  new_not_before TIMESTAMPTZ,
-  actor TEXT NOT NULL,
-  reason TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- ========================================================================
--- Token revocation tracking
--- ========================================================================
-
-CREATE TABLE IF NOT EXISTS token_revocations (
-  revocation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  jti           TEXT NOT NULL UNIQUE,
-  subject_id    UUID NOT NULL,
-  session_id    UUID,
-  expires_at    TIMESTAMPTZ NOT NULL,
-  reason        TEXT,
-  actor         TEXT,
-  issued_by     TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  metadata      JSONB
-);
-
-CREATE TABLE IF NOT EXISTS gateway_cache_snapshot (
-  snapshot_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  payload      BYTEA NOT NULL,
-  checksum     TEXT NOT NULL
-);
-
 -- ==========================================================================
 -- 2) FUNCTIONS / TRIGGERS
 -- ==========================================================================
@@ -252,22 +188,6 @@ BEGIN
    WHERE id = p_session_id
      AND revoked_at IS NULL
      AND expires_at > now();
-END$$;
-
-CREATE OR REPLACE FUNCTION revoke_session_access_tokens(p_session_id UUID, p_reason TEXT DEFAULT 'session_revoked')
-RETURNS INTEGER LANGUAGE plpgsql AS $$
-DECLARE
-  n INTEGER;
-BEGIN
-  INSERT INTO revoked_access_token_jti(jti, reason)
-  SELECT jti, p_reason
-    FROM access_token_jti
-   WHERE session_id = p_session_id
-     AND expires_at > now()
-  ON CONFLICT (jti) DO NOTHING;
-
-  GET DIAGNOSTICS n = ROW_COUNT;
-  RETURN n;
 END$$;
 
 CREATE OR REPLACE FUNCTION session_bump_version(p_session_id UUID, p_reason TEXT DEFAULT 'session_version_bump')
@@ -321,8 +241,6 @@ BEGIN
      SET revoked_at = COALESCE(revoked_at, now())
    WHERE session_id = refreshed.id
       OR family_id = refreshed.family_id;
-
-  PERFORM revoke_session_access_tokens(refreshed.id, reason);
 
   INSERT INTO session_events(session_id, kind, details)
   VALUES (refreshed.id, 'logout', jsonb_build_object('reason', reason));
@@ -412,18 +330,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_verify__active_per_user_purpose
   ON verification_tokens(user_id, purpose)
   WHERE used_at IS NULL AND revoked_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_atj__user_issued
-  ON access_token_jti(user_id, issued_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_revoked_atj__recent
-  ON revoked_access_token_jti(revoked_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_subject_version_audit_subject_created_at
-  ON subject_version_audit(subject_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_token_revocations_subject ON token_revocations(subject_id);
-CREATE INDEX IF NOT EXISTS idx_token_revocations_expires_at ON token_revocations(expires_at);
-
-CREATE INDEX IF NOT EXISTS idx_gateway_cache_snapshot_generated_at
-  ON gateway_cache_snapshot(generated_at DESC);
 COMMIT;

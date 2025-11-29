@@ -22,10 +22,4 @@ type TokenRepository interface {
 	RevokeRefreshTokensByFamily(ctx context.Context, familyID string, reason string) (int, error)
 	RevokeRefreshTokensForUser(ctx context.Context, userID string) error
 	UpdateRefreshTokenIssuedVersion(ctx context.Context, refreshTokenID string, version int64) error
-	TrackJTI(ctx context.Context, record domain.AccessTokenJTI) error
-	RevokeJTI(ctx context.Context, revoked domain.RevokedAccessTokenJTI) error
-	RevokeJTIsBySession(ctx context.Context, sessionID string, reason string) (int, error)
-	RevokeJTIsForUser(ctx context.Context, userID string, reason string) (int, error)
-	IsJTIRevoked(ctx context.Context, jti string) (bool, error)
-	CleanupExpiredJTIs(ctx context.Context, expiresBefore time.Time) (int, error)
 }

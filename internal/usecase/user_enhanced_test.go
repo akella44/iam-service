@@ -362,10 +362,6 @@ func (m *userCRUDEventPublisherMock) PublishSessionVersionBumped(_ context.Conte
 	return nil
 }
 
-func (m *userCRUDEventPublisherMock) PublishSubjectVersionBumped(_ context.Context, event domain.SubjectVersionBumpedEvent) error {
-	return nil
-}
-
 // Tests
 
 func TestUserService_CreateUserAdmin_Success(t *testing.T) {

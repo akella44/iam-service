@@ -615,9 +615,6 @@ func (s *PasswordResetService) applyNewPassword(ctx context.Context, user domain
 		if err := s.tokens.RevokeRefreshTokensForUser(ctx, user.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
 			s.logger.Warn("revoke refresh tokens failed", zap.String("user_id", user.ID), zap.Error(err))
 		}
-		if _, err := s.tokens.RevokeJTIsForUser(ctx, user.ID, reason); err != nil && !errors.Is(err, repository.ErrNotFound) {
-			s.logger.Warn("revoke JTIs failed", zap.String("user_id", user.ID), zap.Error(err))
-		}
 	}
 
 	sessionsRevoked := 0

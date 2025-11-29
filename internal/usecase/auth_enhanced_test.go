@@ -185,7 +185,6 @@ func (r *loginSessionRepository) SetVersion(context.Context, string, int64) erro
 
 type loginTokenRepository struct {
 	lastRefresh domain.RefreshToken
-	trackedJTIs []domain.AccessTokenJTI
 }
 
 func (r *loginTokenRepository) CreateVerification(context.Context, domain.VerificationToken) error {
@@ -221,23 +220,6 @@ func (r *loginTokenRepository) RevokeRefreshTokensByFamily(context.Context, stri
 	return 0, nil
 }
 func (r *loginTokenRepository) RevokeRefreshTokensForUser(context.Context, string) error { return nil }
-func (r *loginTokenRepository) TrackJTI(_ context.Context, record domain.AccessTokenJTI) error {
-	r.trackedJTIs = append(r.trackedJTIs, record)
-	return nil
-}
-func (r *loginTokenRepository) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return nil
-}
-func (r *loginTokenRepository) RevokeJTIsBySession(context.Context, string, string) (int, error) {
-	return 0, nil
-}
-func (r *loginTokenRepository) RevokeJTIsForUser(context.Context, string, string) (int, error) {
-	return 0, nil
-}
-func (r *loginTokenRepository) IsJTIRevoked(context.Context, string) (bool, error) { return false, nil }
-func (r *loginTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
-	return 0, nil
-}
 
 func (r *loginTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
 	return nil

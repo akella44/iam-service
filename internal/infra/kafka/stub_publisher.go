@@ -138,21 +138,4 @@ func (p *StubPublisher) PublishSessionVersionBumped(_ context.Context, event dom
 	return nil
 }
 
-// PublishSubjectVersionBumped logs iam.subject.version.bumped events.
-func (p *StubPublisher) PublishSubjectVersionBumped(_ context.Context, event domain.SubjectVersionBumpedEvent) error {
-	payload := map[string]any{
-		"subject_id":          event.SubjectID,
-		"previous_version":    event.PreviousVersion,
-		"new_version":         event.NewVersion,
-		"previous_not_before": event.PreviousNotBefore,
-		"new_not_before":      event.NewNotBefore,
-		"actor":               event.Actor,
-		"reason":              event.Reason,
-		"bumped_at":           event.BumpedAt,
-		"metadata":            event.Metadata,
-	}
-	p.logEvent("iam.subject.version.bumped", event.SubjectID, event.BumpedAt, payload)
-	return nil
-}
-
 var _ port.EventPublisher = (*StubPublisher)(nil)

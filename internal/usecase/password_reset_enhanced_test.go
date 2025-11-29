@@ -59,9 +59,6 @@ func TestPasswordResetServiceChangePasswordDefaultsUserIDToActor(t *testing.T) {
 	if !tokenRepo.revokedRefreshTokensForUser || tokenRepo.revokedRefreshTokensUserID != user.ID {
 		t.Fatalf("expected refresh tokens revoked for user")
 	}
-	if !tokenRepo.revokedJTIsForUser || tokenRepo.revokedJTIsUserID != user.ID {
-		t.Fatalf("expected JTIs revoked for user")
-	}
 }
 
 func newPasswordResetSessionRepoMock(now func() time.Time, sessions ...domain.Session) *passwordResetSessionRepoMock {
@@ -200,7 +197,6 @@ type passwordResetEventPublisherMock struct {
 	passwordResetRequested []domain.PasswordResetRequestedEvent
 	sessionRevoked         []domain.SessionRevokedEvent
 	sessionVersionBumped   []domain.SessionVersionBumpedEvent
-	subjectVersionBumped   []domain.SubjectVersionBumpedEvent
 }
 
 func (m *passwordResetEventPublisherMock) PublishUserRegistered(_ context.Context, _ domain.UserRegisteredEvent) error {
@@ -235,11 +231,6 @@ func (m *passwordResetEventPublisherMock) PublishSessionVersionBumped(_ context.
 	return nil
 }
 
-func (m *passwordResetEventPublisherMock) PublishSubjectVersionBumped(_ context.Context, event domain.SubjectVersionBumpedEvent) error {
-	m.subjectVersionBumped = append(m.subjectVersionBumped, event)
-	return nil
-}
-
 func TestPasswordResetServiceChangePasswordRevokesSessionsAndTokens(t *testing.T) {
 	currentHash, err := security.HashPassword("Curr3nt#Passw0rd")
 	if err != nil {
@@ -261,7 +252,7 @@ func TestPasswordResetServiceChangePasswordRevokesSessionsAndTokens(t *testing.T
 		}},
 	}
 
-	tokenRepo := &passwordResetTokenRepoMock{jtiRevokeCount: 3}
+	tokenRepo := &passwordResetTokenRepoMock{}
 	events := &passwordResetEventPublisherMock{}
 
 	fixedNow := time.Date(2025, 10, 24, 9, 30, 0, 0, time.UTC)
@@ -306,12 +297,6 @@ func TestPasswordResetServiceChangePasswordRevokesSessionsAndTokens(t *testing.T
 	}
 	if !tokenRepo.revokedRefreshTokensForUser || tokenRepo.revokedRefreshTokensUserID != user.ID {
 		t.Fatalf("expected refresh tokens revoked for user")
-	}
-	if !tokenRepo.revokedJTIsForUser || tokenRepo.revokedJTIsUserID != user.ID {
-		t.Fatalf("expected JTIs revoked for user")
-	}
-	if tokenRepo.revokedJTIsReason != passwordChangeReason {
-		t.Fatalf("expected revoke reason %s, got %s", passwordChangeReason, tokenRepo.revokedJTIsReason)
 	}
 	if ok, err := security.VerifyPassword(newPassword, userRepo.updatedHash); err != nil || !ok {
 		t.Fatalf("expected updated hash to validate new password")

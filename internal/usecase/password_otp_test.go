@@ -201,11 +201,8 @@ func TestPasswordResetService_ConfirmPasswordReset_CompletesFlow(t *testing.T) {
 	if tokenRepo.storedToken != nil {
 		t.Fatalf("expected token cleared after consumption")
 	}
-	if !tokenRepo.revokedRefreshTokensForUser || !tokenRepo.revokedJTIsForUser {
-		t.Fatalf("expected token revocations triggered")
-	}
-	if tokenRepo.revokedJTIsReason != passwordResetReason {
-		t.Fatalf("expected revoke reason %s, got %s", passwordResetReason, tokenRepo.revokedJTIsReason)
+	if !tokenRepo.revokedRefreshTokensForUser {
+		t.Fatalf("expected refresh token revocations triggered")
 	}
 	if userRepo.updatedID != user.ID {
 		t.Fatalf("expected password update for %s, got %s", user.ID, userRepo.updatedID)

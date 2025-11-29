@@ -11,25 +11,23 @@ import (
 
 // Repositories groups concrete PostgreSQL repository implementations.
 type Repositories struct {
-	pool            *pgxpool.Pool
-	Users           *UserRepository
-	Roles           *RoleRepository
-	Permissions     *PermissionRepository
-	Tokens          *TokenRepository
-	Sessions        *SessionRepository
-	SubjectVersions *SubjectVersionRepository
+	pool        *pgxpool.Pool
+	Users       *UserRepository
+	Roles       *RoleRepository
+	Permissions *PermissionRepository
+	Tokens      *TokenRepository
+	Sessions    *SessionRepository
 }
 
 // NewRepositories wires all repositories backed by the provided pool.
 func NewRepositories(pool *pgxpool.Pool) *Repositories {
 	return &Repositories{
-		pool:            pool,
-		Users:           NewUserRepository(pool),
-		Roles:           NewRoleRepository(pool),
-		Permissions:     NewPermissionRepository(pool),
-		Tokens:          NewTokenRepository(pool),
-		Sessions:        NewSessionRepository(pool),
-		SubjectVersions: NewSubjectVersionRepository(pool),
+		pool:        pool,
+		Users:       NewUserRepository(pool),
+		Roles:       NewRoleRepository(pool),
+		Permissions: NewPermissionRepository(pool),
+		Tokens:      NewTokenRepository(pool),
+		Sessions:    NewSessionRepository(pool),
 	}
 }
 
@@ -54,9 +52,6 @@ func (r *Repositories) WithTx(tx pgx.Tx) *Repositories {
 	}
 	if r.Sessions != nil {
 		clone.Sessions = r.Sessions.WithTx(tx)
-	}
-	if r.SubjectVersions != nil {
-		clone.SubjectVersions = r.SubjectVersions.WithTx(tx)
 	}
 	return clone
 }

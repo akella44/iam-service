@@ -277,31 +277,4 @@ func (p *EventPublisher) PublishSessionVersionBumped(ctx context.Context, event 
 	return p.publish(ctx, event.EventID, "iam.session.version.bumped", event.SessionID, event.UserID, event.BumpedAt, payload)
 }
 
-// PublishSubjectVersionBumped publishes iam.subject.version.bumped events.
-func (p *EventPublisher) PublishSubjectVersionBumped(ctx context.Context, event domain.SubjectVersionBumpedEvent) error {
-	payload := struct {
-		SubjectID         string         `json:"subject_id"`
-		PreviousVersion   *int64         `json:"previous_version,omitempty"`
-		NewVersion        int64          `json:"new_version"`
-		PreviousNotBefore *time.Time     `json:"previous_not_before,omitempty"`
-		NewNotBefore      *time.Time     `json:"new_not_before,omitempty"`
-		Actor             string         `json:"actor"`
-		Reason            string         `json:"reason,omitempty"`
-		BumpedAt          time.Time      `json:"bumped_at"`
-		Metadata          map[string]any `json:"metadata,omitempty"`
-	}{
-		SubjectID:         event.SubjectID,
-		PreviousVersion:   event.PreviousVersion,
-		NewVersion:        event.NewVersion,
-		PreviousNotBefore: event.PreviousNotBefore,
-		NewNotBefore:      event.NewNotBefore,
-		Actor:             event.Actor,
-		Reason:            event.Reason,
-		BumpedAt:          event.BumpedAt.UTC(),
-		Metadata:          event.Metadata,
-	}
-
-	return p.publish(ctx, event.EventID, "iam.subject.version.bumped", event.SubjectID, "", event.BumpedAt, payload)
-}
-
 var _ port.EventPublisher = (*EventPublisher)(nil)

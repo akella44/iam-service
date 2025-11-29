@@ -92,20 +92,6 @@ type SessionVersionBumpedEvent struct {
 	Metadata  map[string]any
 }
 
-// SubjectVersionBumpedEvent represents the payload for iam.subject.version.bumped messages.
-type SubjectVersionBumpedEvent struct {
-	EventID           string
-	SubjectID         string
-	PreviousVersion   *int64
-	NewVersion        int64
-	PreviousNotBefore *time.Time
-	NewNotBefore      *time.Time
-	Actor             string
-	Reason            string
-	BumpedAt          time.Time
-	Metadata          map[string]any
-}
-
 // TokenRevokedEvent represents the payload for iam.token.revoked messages.
 type TokenRevokedEvent struct {
 	EventID   string

@@ -268,30 +268,6 @@ func (r *testTokenRepo) RevokeRefreshTokensForUser(context.Context, string) erro
 	return errors.New("unexpected call")
 }
 
-func (r *testTokenRepo) TrackJTI(context.Context, domain.AccessTokenJTI) error {
-	return errors.New("unexpected call")
-}
-
-func (r *testTokenRepo) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return errors.New("unexpected call")
-}
-
-func (r *testTokenRepo) RevokeJTIsBySession(context.Context, string, string) (int, error) {
-	return 0, errors.New("unexpected call")
-}
-
-func (r *testTokenRepo) RevokeJTIsForUser(context.Context, string, string) (int, error) {
-	return 0, errors.New("unexpected call")
-}
-
-func (r *testTokenRepo) IsJTIRevoked(context.Context, string) (bool, error) {
-	return false, errors.New("unexpected call")
-}
-
-func (r *testTokenRepo) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
-	return 0, errors.New("unexpected call")
-}
-
 func (r *testTokenRepo) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
 	return nil
 }
@@ -871,5 +847,71 @@ func TestAuthService_ParseAccessToken_RejectsRevokedSession(t *testing.T) {
 	// ensure the revocation path cached the terminal version for future lookups
 	if version, cacheErr := cache.GetSessionVersion(context.Background(), sessionID); cacheErr != nil || version != 3 {
 		t.Fatalf("expected cached session version 3, got version=%d err=%v", version, cacheErr)
+	}
+}
+
+func TestAuthService_ParseAccessToken_RejectsRevokedSessionViaCacheOnly(t *testing.T) {
+	keyProvider, keyDir := createTestKeyProvider(t)
+
+	cfg := &config.AppConfig{
+		App: config.AppSettings{Name: "test-app", Env: "development"},
+		JWT: config.JWTSettings{KeyDirectory: keyDir},
+	}
+
+	tokenGenerator, err := security.NewTokenGenerator(keyProvider, "private")
+	if err != nil {
+		t.Fatalf("NewTokenGenerator failed: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	userID := "user-cache"
+	now := time.Now().UTC()
+
+	service, err := NewAuthService(cfg, nil, nil, nil, nil, nil, tokenGenerator, keyProvider, nil, nil)
+	if err != nil {
+		t.Fatalf("NewAuthService failed: %v", err)
+	}
+
+	cache := &stubSessionVersionCache{}
+	service.WithSessionVersionCache(cache, time.Minute)
+	revocationStore := &stubSessionRevocationStore{
+		entries: map[string]struct {
+			revoked bool
+			reason  string
+		}{
+			sessionID: {revoked: true, reason: "logout_all"},
+		},
+	}
+	service.WithSessionRevocationStore(revocationStore, time.Hour)
+
+	claims := security.AccessTokenClaims{
+		UserID:         userID,
+		SessionID:      sessionID,
+		SessionVersion: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   security.HashToken(userID + ":" + cfg.App.Name),
+			Issuer:    cfg.App.Name,
+			Audience:  jwt.ClaimStrings{cfg.App.Name},
+			IssuedAt:  jwt.NewNumericDate(now.Add(-time.Minute)),
+			NotBefore: jwt.NewNumericDate(now.Add(-time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+			ID:        uuid.NewString(),
+		},
+	}
+
+	signingKey, err := keyProvider.GetSigningKey()
+	if err != nil {
+		t.Fatalf("failed to get signing key: %v", err)
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "private"
+	signed, err := token.SignedString(signingKey)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	if _, err := service.ParseAccessToken(context.Background(), signed); !errors.Is(err, ErrInvalidAccessToken) {
+		t.Fatalf("expected ErrInvalidAccessToken for redis-revoked session, got %v", err)
 	}
 }

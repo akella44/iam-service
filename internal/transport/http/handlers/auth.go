@@ -69,14 +69,23 @@ func (h *AuthHandler) refresh(c *gin.Context) {
 // @Summary Logout the current session
 // @Description Revokes the caller's active session using the access token's session context.
 // @Tags Authentication
+// @Security Bearer
 // @Produce json
+// @Param Authorization header string true "Bearer access token"
 // @Success 204 {string} string ""
 // @Failure 401 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /api/v1/auth/logout [post]
 func (h *AuthHandler) logout(c *gin.Context) {
 	claims := getAccessTokenClaims(c)
 	if claims == nil {
+		c.JSON(http.StatusUnauthorized, NewErrorResponse(c, "authentication required"))
+		return
+	}
+
+	userID := strings.TrimSpace(claims.UserID)
+	if userID == "" {
 		c.JSON(http.StatusUnauthorized, NewErrorResponse(c, "authentication required"))
 		return
 	}
@@ -87,9 +96,13 @@ func (h *AuthHandler) logout(c *gin.Context) {
 		return
 	}
 
-	if err := h.auth.RevokeSession(c.Request.Context(), sessionID, "user_logout"); err != nil {
+	if err := h.auth.RevokeSession(c.Request.Context(), userID, sessionID, "user_logout"); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			c.Status(http.StatusNoContent)
+			return
+		}
+		if errors.Is(err, usecase.ErrSessionForbidden) {
+			c.JSON(http.StatusForbidden, NewErrorResponse(c, "session not owned by user"))
 			return
 		}
 		c.JSON(http.StatusInternalServerError, NewErrorResponse(c, "failed to revoke session"))

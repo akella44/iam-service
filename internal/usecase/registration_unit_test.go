@@ -208,30 +208,6 @@ func (m *mockTokenRepository) RevokeRefreshTokensForUser(context.Context, string
 	return errors.New("unexpected call: RevokeRefreshTokensForUser")
 }
 
-func (m *mockTokenRepository) TrackJTI(context.Context, domain.AccessTokenJTI) error {
-	return errors.New("unexpected call: TrackJTI")
-}
-
-func (m *mockTokenRepository) RevokeJTI(context.Context, domain.RevokedAccessTokenJTI) error {
-	return errors.New("unexpected call: RevokeJTI")
-}
-
-func (m *mockTokenRepository) RevokeJTIsBySession(context.Context, string, string) (int, error) {
-	return 0, errors.New("unexpected call: RevokeJTIsBySession")
-}
-
-func (m *mockTokenRepository) RevokeJTIsForUser(context.Context, string, string) (int, error) {
-	return 0, errors.New("unexpected call: RevokeJTIsForUser")
-}
-
-func (m *mockTokenRepository) IsJTIRevoked(context.Context, string) (bool, error) {
-	return false, errors.New("unexpected call: IsJTIRevoked")
-}
-
-func (m *mockTokenRepository) CleanupExpiredJTIs(context.Context, time.Time) (int, error) {
-	return 0, errors.New("unexpected call: CleanupExpiredJTIs")
-}
-
 func (m *mockTokenRepository) UpdateRefreshTokenIssuedVersion(context.Context, string, int64) error {
 	return errors.New("unexpected call: UpdateRefreshTokenIssuedVersion")
 }
@@ -273,10 +249,6 @@ func (m *mockEventPublisher) PublishSessionRevoked(context.Context, domain.Sessi
 }
 
 func (m *mockEventPublisher) PublishSessionVersionBumped(context.Context, domain.SessionVersionBumpedEvent) error {
-	return nil
-}
-
-func (m *mockEventPublisher) PublishSubjectVersionBumped(context.Context, domain.SubjectVersionBumpedEvent) error {
 	return nil
 }
 

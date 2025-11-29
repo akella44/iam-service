@@ -52,11 +52,6 @@ type TokenService struct {
 	logger            *zap.Logger
 	sessionCacheTTL   time.Duration
 	now               func() time.Time
-	jtiCache          port.JTIDenylistCache
-	jtiMetrics        port.JTIDenylistMetrics
-	jtiCacheWarmup    time.Duration
-	jtiCacheStaleTTL  time.Duration
-	startedAt         time.Time
 	degradationPolicy domain.DegradationPolicy
 }
 
@@ -71,15 +66,6 @@ func NewTokenService(cfg *config.AppConfig, sessions port.SessionRepository, tok
 		ttl = cfg.Redis.SessionVersionTTL
 	}
 
-	warmup := 0 * time.Second
-	if cfg != nil && cfg.Revocation.Cache.WarmupGracePeriod > 0 {
-		warmup = cfg.Revocation.Cache.WarmupGracePeriod
-	}
-	staleTTL := 30 * time.Second
-	if cfg != nil && cfg.Revocation.Cache.StaleTTL > 0 {
-		staleTTL = cfg.Revocation.Cache.StaleTTL
-	}
-
 	service := &TokenService{
 		cfg:               cfg,
 		sessions:          sessions,
@@ -88,12 +74,9 @@ func NewTokenService(cfg *config.AppConfig, sessions port.SessionRepository, tok
 		keyProvider:       keyProvider,
 		logger:            logger,
 		sessionCacheTTL:   ttl,
-		jtiCacheWarmup:    warmup,
-		jtiCacheStaleTTL:  staleTTL,
 		degradationPolicy: domain.NewDegradationPolicy(domain.DegradationPolicyModeLenient),
 	}
 	service.now = func() time.Time { return time.Now().UTC() }
-	service.startedAt = service.now()
 	if cfg != nil {
 		policyMode := domain.ParseDegradationPolicyMode(cfg.Revocation.DegradationPolicy)
 		service.degradationPolicy = domain.NewDegradationPolicy(policyMode)
@@ -105,24 +88,6 @@ func NewTokenService(cfg *config.AppConfig, sessions port.SessionRepository, tok
 func (s *TokenService) WithClock(clock func() time.Time) *TokenService {
 	if clock != nil {
 		s.now = clock
-		s.startedAt = clock()
-	}
-	return s
-}
-
-// WithJTIDenylist injects the local denylist cache, metrics, and timing thresholds.
-func (s *TokenService) WithJTIDenylist(cache port.JTIDenylistCache, metrics port.JTIDenylistMetrics, warmup, staleTTL time.Duration) *TokenService {
-	if cache != nil {
-		s.jtiCache = cache
-	}
-	if metrics != nil {
-		s.jtiMetrics = metrics
-	}
-	if warmup >= 0 {
-		s.jtiCacheWarmup = warmup
-	}
-	if staleTTL > 0 {
-		s.jtiCacheStaleTTL = staleTTL
 	}
 	return s
 }
@@ -185,13 +150,6 @@ func (s *TokenService) ValidateToken(ctx context.Context, rawToken string) (*Tok
 			return s.expiredResult(claims, "access token expired"), nil
 		}
 		result.Source = fmt.Sprintf("exp:%s", claims.ExpiresAt.Time.UTC().Format(time.RFC3339))
-	}
-
-	if status, reason, revokedReason := s.checkJTIRevocation(ctx, claims); status != TokenValidationStatusActive {
-		result.Status = status
-		result.Reason = reason
-		result.RevokedReason = revokedReason
-		return result, nil
 	}
 
 	if result.SessionID == "" {
@@ -361,82 +319,6 @@ func (s *TokenService) revokeFamily(ctx context.Context, session *domain.Session
 	}
 
 	return revokeReason
-}
-
-func (s *TokenService) checkJTIRevocation(ctx context.Context, claims *security.AccessTokenClaims) (TokenValidationStatus, string, string) {
-	if s == nil || claims == nil {
-		return TokenValidationStatusActive, "", ""
-	}
-
-	jti := strings.TrimSpace(claims.ID)
-	if jti == "" {
-		return TokenValidationStatusActive, "", ""
-	}
-
-	now := s.now()
-	fallback := false
-	fallbackReason := domain.DegradationReasonJTICacheUnavailable
-
-	if s.jtiCache != nil {
-		revoked, err := s.jtiCache.Contains(ctx, jti)
-		if err != nil {
-			s.logger.Warn("jti denylist cache lookup failed", zap.String("jti", jti), zap.Error(err))
-			fallback = true
-			fallbackReason = domain.DegradationReasonJTICacheUnavailable
-		} else if revoked {
-			if s.jtiMetrics != nil {
-				s.jtiMetrics.IncCacheHit()
-				s.jtiMetrics.IncDeny()
-			}
-			return TokenValidationStatusRevoked, "token revoked", "token_revoked"
-		} else {
-			if s.jtiMetrics != nil {
-				s.jtiMetrics.IncCacheMiss()
-			}
-			warmupRemaining := s.jtiCacheWarmup - now.Sub(s.startedAt)
-			staleElapsed := s.jtiCacheStaleTTL > 0 && now.Sub(s.startedAt) >= s.jtiCacheStaleTTL
-			if warmupRemaining > 0 || staleElapsed {
-				fallback = true
-				fallbackReason = domain.DegradationReasonJTICacheMiss
-			}
-		}
-	} else {
-		fallback = true
-		fallbackReason = domain.DegradationReasonJTICacheUnavailable
-	}
-
-	if !fallback {
-		return TokenValidationStatusActive, "", ""
-	}
-
-	return s.lookupJTIDenylistAuthority(ctx, jti, fallbackReason)
-}
-
-func (s *TokenService) lookupJTIDenylistAuthority(ctx context.Context, jti string, reason domain.DegradationReason) (TokenValidationStatus, string, string) {
-	if s.tokens == nil {
-		if s.degradationPolicy.AllowsFallback(reason) {
-			return TokenValidationStatusActive, "", ""
-		}
-		return TokenValidationStatusInvalid, "denylist repository unavailable", ""
-	}
-
-	revoked, err := s.tokens.IsJTIRevoked(ctx, jti)
-	if err != nil {
-		s.logger.Warn("check jti revoked failed", zap.String("jti", jti), zap.Error(err))
-		if s.degradationPolicy.AllowsFallback(reason) {
-			return TokenValidationStatusActive, "", ""
-		}
-		return TokenValidationStatusInvalid, "denylist lookup failed", ""
-	}
-
-	if revoked {
-		if s.jtiMetrics != nil {
-			s.jtiMetrics.IncDeny()
-		}
-		return TokenValidationStatusRevoked, "token revoked", "token_revoked"
-	}
-
-	return TokenValidationStatusActive, "", ""
 }
 
 func (s *TokenService) expiredResult(claims *security.AccessTokenClaims, reason string) *TokenValidationResult {

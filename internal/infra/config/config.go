@@ -49,14 +49,15 @@ type PostgresSettings struct {
 
 // RedisSettings configures Redis connection and TLS
 type RedisSettings struct {
-	Host                 string        `mapstructure:"host"`
-	Port                 int           `mapstructure:"port"`
-	DB                   int           `mapstructure:"db"`
-	Password             string        `mapstructure:"password"`
-	TLSEnabled           bool          `mapstructure:"tls_enabled"`
-	SessionVersionPrefix string        `mapstructure:"session_version_prefix"`
-	SessionVersionTTL    time.Duration `mapstructure:"session_version_ttl"`
-	SubjectVersionPrefix string        `mapstructure:"subject_version_prefix"`
+	Host                    string        `mapstructure:"host"`
+	Port                    int           `mapstructure:"port"`
+	DB                      int           `mapstructure:"db"`
+	Password                string        `mapstructure:"password"`
+	TLSEnabled              bool          `mapstructure:"tls_enabled"`
+	SessionVersionPrefix    string        `mapstructure:"session_version_prefix"`
+	SessionVersionTTL       time.Duration `mapstructure:"session_version_ttl"`
+	SessionRevocationPrefix string        `mapstructure:"session_revocation_prefix"`
+	SessionRevocationTTL    time.Duration `mapstructure:"session_revocation_ttl"`
 }
 
 // KafkaSettings configures Kafka producer
@@ -99,28 +100,7 @@ type TelemetrySettings struct {
 }
 
 type RevocationSettings struct {
-	DegradationPolicy string                   `mapstructure:"degradation_policy"`
-	Cache             RevocationCacheSettings  `mapstructure:"cache"`
-	Bloom             RevocationBloomSettings  `mapstructure:"bloom"`
-	Replay            RevocationReplaySettings `mapstructure:"replay"`
-}
-
-type RevocationCacheSettings struct {
-	WarmupGracePeriod   time.Duration `mapstructure:"warmup_grace_period"`
-	StaleTTL            time.Duration `mapstructure:"stale_ttl"`
-	SubjectVersionTTL   time.Duration `mapstructure:"subject_version_ttl"`
-	DenylistSnapshotTTL time.Duration `mapstructure:"denylist_snapshot_ttl"`
-}
-
-type RevocationBloomSettings struct {
-	WindowDuration    time.Duration `mapstructure:"window_duration"`
-	WindowCount       int           `mapstructure:"window_count"`
-	FalsePositiveRate float64       `mapstructure:"false_positive_rate"`
-}
-
-type RevocationReplaySettings struct {
-	MaxEventLag     time.Duration `mapstructure:"max_event_lag"`
-	ReplayTolerance time.Duration `mapstructure:"replay_tolerance"`
+	DegradationPolicy string `mapstructure:"degradation_policy"`
 }
 
 func Load() (*AppConfig, error) {
@@ -156,7 +136,8 @@ func Load() (*AppConfig, error) {
 		"redis.tls_enabled",
 		"redis.session_version_prefix",
 		"redis.session_version_ttl",
-		"redis.subject_version_prefix",
+		"redis.session_revocation_prefix",
+		"redis.session_revocation_ttl",
 		"kafka.brokers",
 		"kafka.topic_prefix",
 		"kafka.async",
@@ -179,15 +160,6 @@ func Load() (*AppConfig, error) {
 		"argon2.salt_length",
 		"argon2.key_length",
 		"revocation.degradation_policy",
-		"revocation.cache.warmup_grace_period",
-		"revocation.cache.stale_ttl",
-		"revocation.cache.subject_version_ttl",
-		"revocation.cache.denylist_snapshot_ttl",
-		"revocation.bloom.window_duration",
-		"revocation.bloom.window_count",
-		"revocation.bloom.false_positive_rate",
-		"revocation.replay.max_event_lag",
-		"revocation.replay.replay_tolerance",
 	}); err != nil {
 		return nil, err
 	}
@@ -231,7 +203,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.tls_enabled", false)
 	v.SetDefault("redis.session_version_prefix", "iam:session_version")
 	v.SetDefault("redis.session_version_ttl", "10m")
-	v.SetDefault("redis.subject_version_prefix", "iam:subject_version")
+	v.SetDefault("redis.session_revocation_prefix", "iam:sess:revoked")
+	v.SetDefault("redis.session_revocation_ttl", "24h")
 
 	// Kafka defaults (T007)
 	v.SetDefault("kafka.brokers", []string{"localhost:9092"})
@@ -265,15 +238,6 @@ func setDefaults(v *viper.Viper) {
 
 	// Revocation defaults (T003)
 	v.SetDefault("revocation.degradation_policy", "lenient")
-	v.SetDefault("revocation.cache.warmup_grace_period", "15s")
-	v.SetDefault("revocation.cache.stale_ttl", "30s")
-	v.SetDefault("revocation.cache.subject_version_ttl", "2m")
-	v.SetDefault("revocation.cache.denylist_snapshot_ttl", "5m")
-	v.SetDefault("revocation.bloom.window_duration", "60s")
-	v.SetDefault("revocation.bloom.window_count", 6)
-	v.SetDefault("revocation.bloom.false_positive_rate", 0.001)
-	v.SetDefault("revocation.replay.max_event_lag", "2s")
-	v.SetDefault("revocation.replay.replay_tolerance", "5s")
 }
 
 func bindEnvs(v *viper.Viper, keys []string) error {
