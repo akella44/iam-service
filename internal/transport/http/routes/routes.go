@@ -58,6 +58,9 @@ func Register(deps Dependencies) *gin.Engine {
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(deps.Logger))
 
+	corsOrigins := []string{"*"}
+	r.Use(middleware.CORS(corsOrigins))
+
 	// Create auth middleware
 	authMiddleware := middleware.RequireAuth(deps.Services.Auth)
 
